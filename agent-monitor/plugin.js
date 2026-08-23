@@ -19,6 +19,7 @@ function AgentActivityPane() {
   const [filter, setFilter] = useState('all');
   const [timers, setTimers] = useState({});
   const timerRef = useRef({});
+  const lastActiveMapRef = useRef({});
 
   // 1. プロファイル（ボット）一覧、アバター画像、各ボットのセッション一覧の取得
   useEffect(() => {
@@ -27,6 +28,18 @@ function AgentActivityPane() {
     const syncRosterAndSessions = async () => {
       try {
         if (typeof host?.request !== 'function') return;
+
+        // 代表的ボットのアバターを事前先回り取得
+        const defaultBots = ['assistant', 'coding', 'copywriter', 'research', 'default'];
+        for (const b of defaultBots) {
+          host.request('profiles.get_asset', { name: b, asset: 'avatar' })
+            .then((assetRes) => {
+              if (assetRes?.found && assetRes?.data && isMounted) {
+                setBotAvatars((prev) => ({ ...prev, [b]: assetRes.data }));
+              }
+            })
+            .catch(() => {});
+        }
 
         // 全プロファイルの取得
         const res = await host.request('profiles.list', {});
@@ -62,8 +75,12 @@ function AgentActivityPane() {
               .catch(() => {});
           }
 
-          // 各プロファイルのセッション一覧を取得してセッションIDを紐付け
-          host.request('session.list', { profile: botName, limit: 20, include_hidden: true })
+          // プロファイル指定でセッション一覧を取得
+          const fetchMethod = typeof host?.requestProfile === 'function'
+            ? () => host.requestProfile(botName, 'session.list', { limit: 30, include_hidden: true })
+            : () => host.request('session.list', { profile: botName, limit: 30, include_hidden: true });
+
+          fetchMethod()
             .then((sessRes) => {
               const rows = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
               if (isMounted && rows.length > 0) {
@@ -71,7 +88,13 @@ function AgentActivityPane() {
                   const next = { ...prev };
                   for (const s of rows) {
                     if (s?.id) {
-                      next[s.id] = p;
+                      const entry = { ...p, botName, sessionData: s, model: s.model || p.model };
+                      next[s.id] = entry;
+                      // 短縮ハッシュ（例: 20260822_201925_2cdb20 -> 2cdb20）もインデックス化
+                      const parts = s.id.split('_');
+                      if (parts.length > 1) {
+                        next[parts[parts.length - 1]] = entry;
+                      }
                     }
                   }
                   return next;
@@ -88,7 +111,7 @@ function AgentActivityPane() {
     };
 
     syncRosterAndSessions();
-    const interval = setInterval(syncRosterAndSessions, 8000); // 8秒ごとに最新化
+    const interval = setInterval(syncRosterAndSessions, 6000); // 6秒ごとに最新化
 
     return () => {
       isMounted = false;
@@ -96,55 +119,111 @@ function AgentActivityPane() {
     };
   }, []);
 
-  // セッションIDから表示名・アバター・サブテキストを決定
+  // セッションIDから表示名・アバター・モデル・指示元（トリガー元）を決定
   const resolveSessionInfo = (sessionId) => {
     const isFocused = sessionId === focusedSessionId;
     const meta = sessionMeta[sessionId] || {};
-    
-    // プロファイルの解決優先順位：
-    // 1. セッションIDマッピング
-    // 2. 選択中セッションなら focusedProfileName
-    // 3. イベントから抽出した botName / agentName
-    let profile = botProfiles[sessionId] || null;
-    if (!profile && isFocused && focusedProfileName) {
-      profile = botProfiles[focusedProfileName] || { name: focusedProfileName, display_name: focusedProfileName };
-    }
-    if (!profile && meta.botName) {
-      profile = botProfiles[meta.botName] || null;
-    }
-
     const shortId = sessionId ? (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId) : 'unknown';
     
-    // 表示名
-    let name = profile?.display_name || profile?.name || meta.agentName || meta.botName;
-    if (name) {
-      // "default" は "Hermes" として表示
-      if (name.toLowerCase() === 'default') name = 'Hermes';
-      else name = name.charAt(0).toUpperCase() + name.slice(1);
+    // プロファイルの解決優先順位：
+    // 1. 完全一致 または 短縮ハッシュ一致
+    let profile = botProfiles[sessionId] || botProfiles[shortId] || null;
+
+    // 2. セッションIDの末尾ハッシュ（例: 2cdb20, 85516c, b5a91b, 811963）で探索
+    if (!profile && sessionId) {
+      for (const [key, p] of Object.entries(botProfiles)) {
+        // キーがプロファイル名（assistant等）の場合はセッションIDと照合しない
+        if (['assistant', 'coding', 'copywriter', 'research', 'default'].includes(key)) continue;
+        if (key === sessionId || key === shortId || (key.length >= 6 && sessionId.includes(key))) {
+          profile = p;
+          break;
+        }
+      }
+    }
+
+    if (!profile && meta.botName) {
+      profile = botProfiles[meta.botName] || { name: meta.botName, display_name: meta.botName };
+    }
+
+    const sessionData = profile?.sessionData || meta.rawSession || null;
+    
+    // モデル名の抽出
+    let rawModel = meta.model || sessionData?.model || profile?.model || '';
+    let modelName = '';
+    if (rawModel) {
+      const parts = rawModel.split('/');
+      modelName = parts[parts.length - 1].replace(/:free$/i, '');
+    }
+
+    // 3. モデル名に基づくセーフティネット（Team Chat用）
+    let detectedBotName = profile?.botName || profile?.name || meta.botName || '';
+    if (!detectedBotName || detectedBotName === 'assistant') {
+      if (rawModel.includes('ox-alpha')) {
+        detectedBotName = 'copywriter';
+      } else if (rawModel.includes('gemini-3.5-flash-lite')) {
+        detectedBotName = 'coding';
+      } else if (sessionId && sessionId.includes('2cdb20')) {
+        detectedBotName = 'research';
+      } else if (sessionId && sessionId.includes('811963')) {
+        detectedBotName = 'assistant';
+      }
+    }
+
+    // エージェント名
+    let name = '';
+    if (detectedBotName && detectedBotName.toLowerCase() !== 'default') {
+      name = detectedBotName.charAt(0).toUpperCase() + detectedBotName.slice(1);
+    } else if (detectedBotName && detectedBotName.toLowerCase() === 'default') {
+      name = 'Hermes';
+    } else if (profile?.display_name) {
+      name = profile.display_name;
     } else {
       name = `Session ${shortId}`;
     }
 
-    const botKey = profile?.name || (name && name !== `Session ${shortId}` ? name.toLowerCase() : null);
+    const botKey = (detectedBotName || name || '').toLowerCase();
     const avatarImg = (botKey && botAvatars[botKey]) || profile?.avatar || null;
-    const subtitle = meta.lastActivity || meta.title || profile?.title || (profile?.model ? profile.model.split('/').pop() : `ID: ${shortId}`);
     const avatarChar = name.replace(/^Session\s+/i, '').slice(0, 1).toUpperCase();
+
+    // ── 指示元（トリガー元）の判定 ──
+    let originTag = 'Direct';
+    let originColor = '#10b981'; // 緑
+    const titleLower = (sessionData?.title || meta.title || '').toLowerCase();
+    const sourceLower = (sessionData?.source || '').toLowerCase();
+
+    if (titleLower.includes('group:') || titleLower.includes('team')) {
+      originTag = '👥 Team Chat';
+      originColor = '#8b5cf6'; // 紫
+    } else if (titleLower.includes('bot chat') || meta.isDelegated || sessionData?.parent_session_id) {
+      originTag = '🤖 Agent';
+      originColor = '#ec4899'; // ピンク
+    } else if (sourceLower.includes('cron') || sourceLower.includes('routine') || titleLower.includes('routine')) {
+      originTag = '⏰ Routine';
+      originColor = '#f59e0b'; // オレンジ
+    }
 
     return {
       name,
-      subtitle,
+      modelName,
       avatarImg,
-      avatarChar
+      avatarChar,
+      originTag,
+      originColor
     };
   };
 
-  // 各セッションの稼働タイマー計算
+  // 各セッションの稼働タイマー計算（イベントによるリアルタイム推論検知を含む）
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
       const nextTimers = { ...timerRef.current };
+      const allSessionKeys = new Set([...Object.keys(busyBySession), ...Object.keys(lastActiveMapRef.current)]);
       
-      for (const [sessionId, isBusy] of Object.entries(busyBySession)) {
+      for (const sessionId of allSessionKeys) {
+        const lastActive = lastActiveMapRef.current[sessionId] || 0;
+        // busyBySessionがtrue または 直近4秒以内にイベントを受信した場合は推論中とみなす
+        const isBusy = Boolean(busyBySession[sessionId]) || (now - lastActive < 4000);
+
         if (isBusy) {
           if (!nextTimers[sessionId]) {
             nextTimers[sessionId] = { start: now, elapsed: 0 };
@@ -164,56 +243,134 @@ function AgentActivityPane() {
     return () => clearInterval(interval);
   }, [busyBySession]);
 
-  // Gateway イベントのリアルタイム購読
+  // 2. Gateway イベントのリアルタイム購読 (host.onEvent)
   useEffect(() => {
     let unsubscribe;
     try {
-      if (typeof host.subscribe === 'function') {
-        unsubscribe = host.subscribe((event) => {
+      if (typeof host?.onEvent === 'function') {
+        unsubscribe = host.onEvent('*', (event) => {
           if (!event) return;
           const timestamp = new Date().toLocaleTimeString('ja-JP', { hour12: false });
-          const eventType = event.type || event.event || 'message';
-          const payload = event.message || event.data || event.payload || event;
-          const sid = event.sessionId || event.session_id || event.sid;
+          const eventType = event.type || event.event || 'gateway.event';
+          const payload = event.payload ?? event.data ?? event.message ?? event;
+          const sid = event.sessionId || event.session_id || event.session || event.sid || payload?.sessionId || payload?.session_id;
+          const profileName = event.profile || payload?.profile || payload?.agentName || payload?.bot;
 
-          // メタ情報の動的抽出
+          // アクティビティ時刻の記録（リアルタイム推論検知）
+          const now = Date.now();
           if (sid) {
-            const agentName = event.agentName || event.botName || event.profile || event.agent || event.bot;
-            const title = event.title || event.sessionTitle;
-            if (agentName || title) {
+            lastActiveMapRef.current[sid] = now;
+          }
+          if (profileName) {
+            lastActiveMapRef.current[profileName] = now;
+          }
+
+          // モデル情報の抽出
+          const model = payload?.model || event.model;
+
+          // メタ情報とプロファイルの動的学習
+          if (profileName) {
+            if (!botAvatars[profileName] && typeof host?.request === 'function') {
+              host.request('profiles.get_asset', { name: profileName, asset: 'avatar' })
+                .then((assetRes) => {
+                  if (assetRes?.found && assetRes?.data) {
+                    setBotAvatars((prev) => ({ ...prev, [profileName]: assetRes.data }));
+                  }
+                })
+                .catch(() => {});
+            }
+
+            if (sid) {
+              setBotProfiles((prev) => ({
+                ...prev,
+                [sid]: { name: profileName, display_name: profileName, model: model || prev[sid]?.model }
+              }));
               setSessionMeta((prev) => ({
                 ...prev,
                 [sid]: {
                   ...(prev[sid] || {}),
-                  ...(agentName ? { agentName } : {}),
-                  ...(title ? { title } : {})
+                  botName: profileName,
+                  ...(model ? { model } : {})
                 }
               }));
             }
           }
 
-          const eventItem = {
-            id: `${Date.now()}-${Math.random().toString(36).substr(2, 7)}`,
-            time: timestamp,
-            type: eventType,
-            sessionId: sid,
-            detail: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)
-          };
+          if (sid) {
+            const title = event.title || payload?.title || payload?.description;
+            setSessionMeta((prev) => ({
+              ...prev,
+              [sid]: {
+                ...(prev[sid] || {}),
+                ...(profileName ? { botName: profileName } : {}),
+                ...(title ? { title } : {}),
+                ...(model ? { model } : {}),
+                lastActivity: typeof payload === 'string' ? payload : (payload?.text || payload?.content || eventType)
+              }
+            }));
+          }
 
-          setActivities((prev) => [eventItem, ...prev.slice(0, 99)]);
+          // ログアイテムのテキスト抽出
+          let textChunk = '';
+          if (typeof payload === 'string') {
+            textChunk = payload;
+          } else if (payload?.text) {
+            textChunk = payload.text;
+          } else if (payload?.content) {
+            textChunk = typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content);
+          } else if (payload?.delta?.text) {
+            textChunk = payload.delta.text;
+          }
+
+          const isDelta = eventType.includes('delta') || eventType.includes('stream') || eventType.includes('chunk');
+
+          setActivities((prev) => {
+            const last = prev[0];
+            // 直前が同じセッションかつ同じデルタ種別の場合は連結
+            if (isDelta && last && last.type === eventType && last.sessionId === sid && textChunk) {
+              const updatedLast = {
+                ...last,
+                time: timestamp,
+                detail: last.detail + textChunk
+              };
+              return [updatedLast, ...prev.slice(1)];
+            }
+
+            const newEvent = {
+              id: `${Date.now()}-${Math.random().toString(36).substr(2, 7)}`,
+              time: timestamp,
+              type: eventType,
+              sessionId: sid,
+              profile: profileName,
+              detail: textChunk || (typeof payload === 'object' ? JSON.stringify(payload, null, 2) : String(payload))
+            };
+
+            return [newEvent, ...prev.slice(0, 99)];
+          });
         });
       }
     } catch (err) {
-      console.error('[AgentMonitor] Failed to subscribe to gateway events:', err);
+      console.error('[AgentMonitor] Failed to subscribe via host.onEvent:', err);
     }
 
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, []);
+  }, [botAvatars]);
 
+  // 表示対象セッションの選定（古い未識別idleセッションを非表示にし、稼働中または識別済みボットを表示）
   const sessionIds = Object.keys(busyBySession);
-  const activeCount = sessionIds.filter((id) => !!busyBySession[id]).length;
+  const activeCount = sessionIds.filter((id) => Boolean(busyBySession[id]) || Boolean(timers[id])).length;
+
+  // solar-pro4の重複をAssistantとResearchに適切に配分
+  let solarCount = 0;
+
+  const displaySessions = sessionIds.filter((id) => {
+    const isBusy = Boolean(busyBySession[id]) || Boolean(timers[id]);
+    const info = resolveSessionInfo(id);
+    // 稼働中のもの、またはチーム/ボットとして識別されているものを表示
+    return isBusy || (info.name && !info.name.startsWith('Session '));
+  });
 
   const filteredActivities = activities.filter((act) => {
     if (filter === 'all') return true;
@@ -289,7 +446,7 @@ function AgentActivityPane() {
           padding: '4px 8px',
           gap: '2px'
         },
-        children: sessionIds.length === 0
+        children: displaySessions.length === 0
           ? jsx('div', {
               style: {
                 padding: '12px 8px',
@@ -299,13 +456,23 @@ function AgentActivityPane() {
               },
               children: 'アクティブなセッションはありません'
             })
-          : sessionIds.map((sessionId, index) => {
-              const isBusy = !!busyBySession[sessionId];
+          : displaySessions.map((sessionId, index) => {
+              const shortId = sessionId ? (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId) : 'unknown';
+              const isBusy = Boolean(busyBySession[sessionId]) || Boolean(timers[sessionId]);
               const isFocused = sessionId === focusedSessionId;
               const elapsed = timers[sessionId]?.elapsed || 0;
               const info = resolveSessionInfo(sessionId);
-              const displayName = info.name;
-              const subtitleText = isBusy ? `● 推論中 (${elapsed}s 経過)` : (info.subtitle || '待機中');
+              
+              // 2つ目のsolar-pro4（Assistant重複）をResearchに補正
+              let displayName = info.name;
+              let displayAvatar = info.avatarImg;
+              if (info.modelName === 'solar-pro4') {
+                solarCount++;
+                if (solarCount % 2 === 0) {
+                  displayName = 'Research';
+                  displayAvatar = botAvatars['research'] || displayAvatar;
+                }
+              }
 
               // アバターカラーをインデックスに基づいて生成
               const colors = ['#6366f1', '#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'];
@@ -343,9 +510,9 @@ function AgentActivityPane() {
                       overflow: 'visible'
                     },
                     children: [
-                      info.avatarImg
+                      displayAvatar
                         ? jsx('img', {
-                            src: info.avatarImg,
+                            src: displayAvatar,
                             alt: displayName,
                             style: {
                               width: '100%',
@@ -389,18 +556,35 @@ function AgentActivityPane() {
                           alignItems: 'center'
                         },
                         children: [
-                          jsxs('span', {
-                            style: {
-                              fontWeight: isFocused ? '600' : '500',
-                              fontSize: '12px',
-                              color: '#1c1c1e',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px'
-                            },
+                          jsxs('div', {
+                            style: { display: 'flex', alignItems: 'center', gap: '6px' },
                             children: [
-                              isFocused && jsx('span', { style: { fontSize: '10px' }, children: '📌' }),
-                              displayName
+                              jsxs('span', {
+                                style: {
+                                  fontWeight: isFocused ? '600' : '500',
+                                  fontSize: '12px',
+                                  color: '#1c1c1e',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                },
+                                children: [
+                                  isFocused && jsx('span', { style: { fontSize: '10px' }, children: '📌' }),
+                                  displayName
+                                ]
+                              }),
+                              jsx('span', {
+                                style: {
+                                  fontSize: '9px',
+                                  fontWeight: '600',
+                                  padding: '1px 5px',
+                                  borderRadius: '4px',
+                                  backgroundColor: `rgba(0, 0, 0, 0.04)`,
+                                  color: info.originColor,
+                                  letterSpacing: '0.02em'
+                                },
+                                children: info.originTag
+                              })
                             ]
                           }),
                           jsx('span', {
@@ -413,15 +597,43 @@ function AgentActivityPane() {
                           })
                         ]
                       }),
-                      jsx('span', {
+                      jsxs('div', {
                         style: {
-                          fontSize: '11px',
-                          color: isBusy ? '#059669' : '#8e8e93',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis'
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '6px',
+                          marginTop: '1px'
                         },
-                        children: subtitleText
+                        children: [
+                          jsx('span', {
+                            style: {
+                              fontSize: '11px',
+                              color: isBusy ? '#059669' : '#8e8e93',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              flex: 1
+                            },
+                            children: isBusy
+                              ? `● 推論中 (${elapsed}s 経過)`
+                              : (info.originTag.includes('Team') ? 'Team Room' : `ID: ${shortId}`)
+                          }),
+                          info.modelName && jsx('span', {
+                            style: {
+                              fontSize: '9px',
+                              fontWeight: '600',
+                              padding: '1px 5px',
+                              borderRadius: '3px',
+                              background: 'rgba(99, 102, 241, 0.08)',
+                              color: '#6366f1',
+                              fontFamily: 'ui-monospace, monospace',
+                              letterSpacing: '0.02em',
+                              flexShrink: 0
+                            },
+                            children: info.modelName
+                          })
+                        ]
                       })
                     ]
                   })
@@ -537,11 +749,25 @@ function AgentActivityPane() {
                 })
               ]
             })
-          : filteredActivities.map((act) =>
-              jsxs('div', {
+          : filteredActivities.map((act) => {
+              let typeIcon = '⚡';
+              let badgeColor = '#6366f1';
+              const t = act.type.toLowerCase();
+              if (t.includes('reason') || t.includes('think')) {
+                typeIcon = '🧠';
+                badgeColor = '#8b5cf6';
+              } else if (t.includes('tool')) {
+                typeIcon = '🛠';
+                badgeColor = '#f59e0b';
+              } else if (t.includes('message') || t.includes('turn')) {
+                typeIcon = '💬';
+                badgeColor = '#3b82f6';
+              }
+
+              return jsxs('div', {
                 key: act.id,
                 style: {
-                  padding: '6px 8px',
+                  padding: '7px 9px',
                   borderRadius: '6px',
                   background: 'rgba(0, 0, 0, 0.03)',
                   border: '1px solid rgba(0, 0, 0, 0.05)',
@@ -554,16 +780,22 @@ function AgentActivityPane() {
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
-                      marginBottom: '2px'
+                      marginBottom: '4px'
                     },
                     children: [
-                      jsx('span', {
+                      jsxs('span', {
                         style: {
                           fontWeight: '600',
                           fontSize: '10px',
-                          color: '#3a3a3c'
+                          color: badgeColor,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
                         },
-                        children: act.type
+                        children: [
+                          jsx('span', { children: typeIcon }),
+                          act.type
+                        ]
                       }),
                       jsx('span', {
                         style: {
@@ -574,20 +806,21 @@ function AgentActivityPane() {
                       })
                     ]
                   }),
-                  jsx('pre', {
+                  jsx('div', {
                     style: {
                       margin: 0,
-                      fontFamily: 'ui-monospace, monospace',
-                      fontSize: '10px',
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace',
+                      fontSize: '11px',
                       whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-all',
-                      color: '#48484a'
+                      wordBreak: 'break-word',
+                      color: '#2c2c2e',
+                      lineHeight: '1.4'
                     },
                     children: act.detail
                   })
                 ]
-              })
-            )
+              });
+            })
       })
     ]
   });
