@@ -13,105 +13,86 @@ function AgentActivityPane() {
   const focusedProfileName = useValue(focusedProfileAtom) || 'default';
   
   const [activities, setActivities] = useState([]);
-  const [sessionMeta, setSessionMeta] = useState({});
-  const [botProfiles, setBotProfiles] = useState({});
+  const [roster, setRoster] = useState([]);
   const [botAvatars, setBotAvatars] = useState({});
+  const [botStates, setBotStates] = useState({});
   const [filter, setFilter] = useState('all');
   const [timers, setTimers] = useState({});
   const timerRef = useRef({});
   const lastActiveMapRef = useRef({});
 
-  // 1. プロファイル（ボット）一覧、アバター画像、各ボットのセッション一覧の取得
+  // 1. プロファイル（ボット）一覧とアバター画像の取得
   useEffect(() => {
     let isMounted = true;
 
-    const syncRosterAndSessions = async () => {
+    const syncRoster = async () => {
       try {
         if (typeof host?.request !== 'function') return;
-
-        // 代表的ボットのアバターを事前先回り取得
-        const defaultBots = ['assistant', 'coding', 'copywriter', 'research', 'default'];
-        for (const b of defaultBots) {
-          host.request('profiles.get_asset', { name: b, asset: 'avatar' })
-            .then((assetRes) => {
-              if (assetRes?.found && assetRes?.data && isMounted) {
-                setBotAvatars((prev) => ({ ...prev, [b]: assetRes.data }));
-              }
-            })
-            .catch(() => {});
-        }
 
         // 全プロファイルの取得
         const res = await host.request('profiles.list', {});
         const profiles = Array.isArray(res?.profiles) ? res.profiles : [];
         if (!isMounted) return;
 
-        const pMap = {};
-        for (const p of profiles) {
-          if (p?.name) {
-            pMap[p.name] = p;
-            if (p.last_session) {
-              pMap[p.last_session] = p;
-            }
-          }
-        }
+        // 代表ボット順にソート（assistant, research, coding, copywriter, default）
+        const order = ['assistant', 'research', 'coding', 'copywriter', 'default'];
+        const sorted = [...profiles].sort((a, b) => {
+          const ia = order.indexOf(a.name);
+          const ib = order.indexOf(b.name);
+          return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+        });
 
-        // 各ボットのアバター画像とセッションリストを取得
-        for (const p of profiles) {
+        setRoster(sorted);
+
+        // 各ボットのアバター画像と最新セッション・モデルを取得
+        for (const p of sorted) {
           const botName = p.name;
           if (!botName) continue;
 
           // アバター取得
-          if (p.has_avatar || p.avatar) {
+          if (p.has_avatar || p.avatar || !botAvatars[botName]) {
             host.request('profiles.get_asset', { name: botName, asset: 'avatar' })
               .then((assetRes) => {
                 if (assetRes?.found && assetRes?.data && isMounted) {
-                  setBotAvatars((prev) => ({
-                    ...prev,
-                    [botName]: assetRes.data
-                  }));
+                  setBotAvatars((prev) => ({ ...prev, [botName]: assetRes.data }));
                 }
               })
               .catch(() => {});
           }
 
-          // プロファイル指定でセッション一覧を取得
+          // 各プロファイルの最新セッション情報を取得してモデルとセッション種別を特定
           const fetchMethod = typeof host?.requestProfile === 'function'
-            ? () => host.requestProfile(botName, 'session.list', { limit: 30, include_hidden: true })
-            : () => host.request('session.list', { profile: botName, limit: 30, include_hidden: true });
+            ? () => host.requestProfile(botName, 'session.list', { limit: 5, include_hidden: true })
+            : () => host.request('session.list', { profile: botName, limit: 5, include_hidden: true });
 
           fetchMethod()
             .then((sessRes) => {
               const rows = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
               if (isMounted && rows.length > 0) {
-                setBotProfiles((prev) => {
-                  const next = { ...prev };
-                  for (const s of rows) {
-                    if (s?.id) {
-                      const entry = { ...p, botName, sessionData: s, model: s.model || p.model };
-                      next[s.id] = entry;
-                      // 短縮ハッシュ（例: 20260822_201925_2cdb20 -> 2cdb20）もインデックス化
-                      const parts = s.id.split('_');
-                      if (parts.length > 1) {
-                        next[parts[parts.length - 1]] = entry;
-                      }
-                    }
+                const latest = rows[0];
+                const teamSession = rows.find((r) => (r.title || '').toLowerCase().includes('team') || (r.title || '').toLowerCase().includes('group:'));
+                const activeSess = teamSession || latest;
+
+                setBotStates((prev) => ({
+                  ...prev,
+                  [botName]: {
+                    model: activeSess?.model || p.model || '',
+                    lastSessionId: activeSess?.id,
+                    isTeam: Boolean(teamSession),
+                    title: activeSess?.title || ''
                   }
-                  return next;
-                });
+                }));
               }
             })
             .catch(() => {});
         }
-
-        setBotProfiles((prev) => ({ ...pMap, ...prev }));
       } catch (err) {
         console.debug('[AgentMonitor] sync error:', err);
       }
     };
 
-    syncRosterAndSessions();
-    const interval = setInterval(syncRosterAndSessions, 6000); // 6秒ごとに最新化
+    syncRoster();
+    const interval = setInterval(syncRoster, 5000); // 5秒ごとに最新化
 
     return () => {
       isMounted = false;
@@ -119,120 +100,35 @@ function AgentActivityPane() {
     };
   }, []);
 
-  // セッションIDから表示名・アバター・モデル・指示元（トリガー元）を決定
-  const resolveSessionInfo = (sessionId) => {
-    const isFocused = sessionId === focusedSessionId;
-    const meta = sessionMeta[sessionId] || {};
-    const shortId = sessionId ? (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId) : 'unknown';
-    
-    // プロファイルの解決優先順位：
-    // 1. 完全一致 または 短縮ハッシュ一致
-    let profile = botProfiles[sessionId] || botProfiles[shortId] || null;
-
-    // 2. セッションIDの末尾ハッシュ（例: 2cdb20, 85516c, b5a91b, 811963）で探索
-    if (!profile && sessionId) {
-      for (const [key, p] of Object.entries(botProfiles)) {
-        // キーがプロファイル名（assistant等）の場合はセッションIDと照合しない
-        if (['assistant', 'coding', 'copywriter', 'research', 'default'].includes(key)) continue;
-        if (key === sessionId || key === shortId || (key.length >= 6 && sessionId.includes(key))) {
-          profile = p;
-          break;
-        }
-      }
-    }
-
-    if (!profile && meta.botName) {
-      profile = botProfiles[meta.botName] || { name: meta.botName, display_name: meta.botName };
-    }
-
-    const sessionData = profile?.sessionData || meta.rawSession || null;
-    
-    // モデル名の抽出
-    let rawModel = meta.model || sessionData?.model || profile?.model || '';
-    let modelName = '';
-    if (rawModel) {
-      const parts = rawModel.split('/');
-      modelName = parts[parts.length - 1].replace(/:free$/i, '');
-    }
-
-    // 3. モデル名に基づくセーフティネット（Team Chat用）
-    let detectedBotName = profile?.botName || profile?.name || meta.botName || '';
-    if (!detectedBotName || detectedBotName === 'assistant') {
-      if (rawModel.includes('ox-alpha')) {
-        detectedBotName = 'copywriter';
-      } else if (rawModel.includes('gemini-3.5-flash-lite')) {
-        detectedBotName = 'coding';
-      } else if (sessionId && sessionId.includes('2cdb20')) {
-        detectedBotName = 'research';
-      } else if (sessionId && sessionId.includes('811963')) {
-        detectedBotName = 'assistant';
-      }
-    }
-
-    // エージェント名
-    let name = '';
-    if (detectedBotName && detectedBotName.toLowerCase() !== 'default') {
-      name = detectedBotName.charAt(0).toUpperCase() + detectedBotName.slice(1);
-    } else if (detectedBotName && detectedBotName.toLowerCase() === 'default') {
-      name = 'Hermes';
-    } else if (profile?.display_name) {
-      name = profile.display_name;
-    } else {
-      name = `Session ${shortId}`;
-    }
-
-    const botKey = (detectedBotName || name || '').toLowerCase();
-    const avatarImg = (botKey && botAvatars[botKey]) || profile?.avatar || null;
-    const avatarChar = name.replace(/^Session\s+/i, '').slice(0, 1).toUpperCase();
-
-    // ── 指示元（トリガー元）の判定 ──
-    let originTag = 'Direct';
-    let originColor = '#10b981'; // 緑
-    const titleLower = (sessionData?.title || meta.title || '').toLowerCase();
-    const sourceLower = (sessionData?.source || '').toLowerCase();
-
-    if (titleLower.includes('group:') || titleLower.includes('team')) {
-      originTag = '👥 Team Chat';
-      originColor = '#8b5cf6'; // 紫
-    } else if (titleLower.includes('bot chat') || meta.isDelegated || sessionData?.parent_session_id) {
-      originTag = '🤖 Agent';
-      originColor = '#ec4899'; // ピンク
-    } else if (sourceLower.includes('cron') || sourceLower.includes('routine') || titleLower.includes('routine')) {
-      originTag = '⏰ Routine';
-      originColor = '#f59e0b'; // オレンジ
-    }
-
-    return {
-      name,
-      modelName,
-      avatarImg,
-      avatarChar,
-      originTag,
-      originColor
-    };
-  };
-
-  // 各セッションの稼働タイマー計算（イベントによるリアルタイム推論検知を含む）
+  // 2. 各ボットの稼働タイマー計算
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
       const nextTimers = { ...timerRef.current };
-      const allSessionKeys = new Set([...Object.keys(busyBySession), ...Object.keys(lastActiveMapRef.current)]);
-      
-      for (const sessionId of allSessionKeys) {
-        const lastActive = lastActiveMapRef.current[sessionId] || 0;
-        // busyBySessionがtrue または 直近4秒以内にイベントを受信した場合は推論中とみなす
-        const isBusy = Boolean(busyBySession[sessionId]) || (now - lastActive < 4000);
+      const anySessionBusy = Object.values(busyBySession).some(Boolean);
+
+      for (const bot of roster) {
+        const botName = bot.name;
+        const bState = botStates[botName] || {};
+        const lastActive = lastActiveMapRef.current[botName] || 0;
+        
+        // 1. 直近4秒以内に推論・ツールイベントを受信した
+        const eventBusy = (now - lastActive < 4000);
+        // 2. このボットのセッション、またはフォーカス中かつGateway全体がbusy
+        const sessBusy = bState.lastSessionId ? Boolean(busyBySession[bState.lastSessionId]) : false;
+        const focusBusy = (focusedProfileName === botName) && anySessionBusy;
+
+        const isBusy = eventBusy || sessBusy || focusBusy;
 
         if (isBusy) {
-          if (!nextTimers[sessionId]) {
-            nextTimers[sessionId] = { start: now, elapsed: 0 };
+          if (!nextTimers[botName]) {
+            nextTimers[botName] = { start: now, elapsed: 0 };
           } else {
-            nextTimers[sessionId].elapsed = Math.floor((now - nextTimers[sessionId].start) / 1000);
+            nextTimers[botName].elapsed = Math.floor((now - nextTimers[botName].start) / 1000);
           }
         } else {
-          if (nextTimers[sessionId]) {
-            delete nextTimers[sessionId];
+          if (nextTimers[botName]) {
+            delete nextTimers[botName];
           }
         }
       }
@@ -241,9 +137,9 @@ function AgentActivityPane() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [busyBySession]);
+  }, [roster, botStates, busyBySession, focusedProfileName]);
 
-  // 2. Gateway イベントのリアルタイム購読 (host.onEvent)
+  // 3. Gateway イベントのリアルタイム購読 (host.onEvent)
   useEffect(() => {
     let unsubscribe;
     try {
@@ -251,64 +147,22 @@ function AgentActivityPane() {
         unsubscribe = host.onEvent('*', (event) => {
           if (!event) return;
           const timestamp = new Date().toLocaleTimeString('ja-JP', { hour12: false });
-          const eventType = event.type || event.event || 'gateway.event';
+          const eventType = (event.type || event.event || 'gateway.event').toLowerCase();
           const payload = event.payload ?? event.data ?? event.message ?? event;
           const sid = event.sessionId || event.session_id || event.session || event.sid || payload?.sessionId || payload?.session_id;
-          const profileName = event.profile || payload?.profile || payload?.agentName || payload?.bot;
-
-          // アクティビティ時刻の記録（リアルタイム推論検知）
-          const now = Date.now();
-          if (sid) {
-            lastActiveMapRef.current[sid] = now;
-          }
-          if (profileName) {
-            lastActiveMapRef.current[profileName] = now;
-          }
-
-          // モデル情報の抽出
-          const model = payload?.model || event.model;
-
-          // メタ情報とプロファイルの動的学習
-          if (profileName) {
-            if (!botAvatars[profileName] && typeof host?.request === 'function') {
-              host.request('profiles.get_asset', { name: profileName, asset: 'avatar' })
-                .then((assetRes) => {
-                  if (assetRes?.found && assetRes?.data) {
-                    setBotAvatars((prev) => ({ ...prev, [profileName]: assetRes.data }));
-                  }
-                })
-                .catch(() => {});
-            }
-
-            if (sid) {
-              setBotProfiles((prev) => ({
-                ...prev,
-                [sid]: { name: profileName, display_name: profileName, model: model || prev[sid]?.model }
-              }));
-              setSessionMeta((prev) => ({
-                ...prev,
-                [sid]: {
-                  ...(prev[sid] || {}),
-                  botName: profileName,
-                  ...(model ? { model } : {})
-                }
-              }));
-            }
-          }
-
-          if (sid) {
-            const title = event.title || payload?.title || payload?.description;
-            setSessionMeta((prev) => ({
-              ...prev,
-              [sid]: {
-                ...(prev[sid] || {}),
-                ...(profileName ? { botName: profileName } : {}),
-                ...(title ? { title } : {}),
-                ...(model ? { model } : {}),
-                lastActivity: typeof payload === 'string' ? payload : (payload?.text || payload?.content || eventType)
-              }
-            }));
-          }
+          
+          // チームチャットや各種イベントからプロファイル名を確実に抽出
+          let rawProfile = (
+            event.profile ||
+            payload?.profile ||
+            payload?.member ||
+            payload?.speaker ||
+            payload?.from?.name ||
+            payload?.agentName ||
+            payload?.bot ||
+            event.speaker ||
+            ''
+          ).toLowerCase();
 
           // ログアイテムのテキスト抽出
           let textChunk = '';
@@ -318,16 +172,38 @@ function AgentActivityPane() {
             textChunk = payload.text;
           } else if (payload?.content) {
             textChunk = typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content);
-          } else if (payload?.delta?.text) {
-            textChunk = payload.delta.text;
-          }
-
           const isDelta = eventType.includes('delta') || eventType.includes('stream') || eventType.includes('chunk');
+
+          // 推論・生成中イベントの厳密判定
+          const isThinkingEvent = eventType.includes('reason') || 
+            eventType.includes('delta') || 
+            eventType.includes('tool') || 
+            eventType.includes('turn.start') || 
+            eventType.includes('step') ||
+            eventType.includes('working') ||
+            Boolean(textChunk && isDelta);
+
+          const isFinishedEvent = eventType.includes('finish') || 
+            eventType.includes('end') || 
+            eventType.includes('stop') || 
+            eventType.includes('complete');
+
+          const now = Date.now();
+          if (rawProfile) {
+            if (isThinkingEvent && !isFinishedEvent) {
+              lastActiveMapRef.current[rawProfile] = now;
+            } else if (isFinishedEvent) {
+              lastActiveMapRef.current[rawProfile] = 0;
+            }
+          } else if (isThinkingEvent && !isFinishedEvent && focusedProfileName) {
+            // プロファイル未記載だが推論中の場合はフォーカス中ボットに適用
+            lastActiveMapRef.current[focusedProfileName] = now;
+            rawProfile = focusedProfileName;
+          }
 
           setActivities((prev) => {
             const last = prev[0];
-            // 直前が同じセッションかつ同じデルタ種別の場合は連結
-            if (isDelta && last && last.type === eventType && last.sessionId === sid && textChunk) {
+            if (isDelta && last && last.type === eventType && last.profile === rawProfile && textChunk) {
               const updatedLast = {
                 ...last,
                 time: timestamp,
@@ -341,7 +217,7 @@ function AgentActivityPane() {
               time: timestamp,
               type: eventType,
               sessionId: sid,
-              profile: profileName,
+              profile: rawProfile,
               detail: textChunk || (typeof payload === 'object' ? JSON.stringify(payload, null, 2) : String(payload))
             };
 
@@ -356,21 +232,9 @@ function AgentActivityPane() {
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [botAvatars]);
+  }, []);
 
-  // 表示対象セッションの選定（古い未識別idleセッションを非表示にし、稼働中または識別済みボットを表示）
-  const sessionIds = Object.keys(busyBySession);
-  const activeCount = sessionIds.filter((id) => Boolean(busyBySession[id]) || Boolean(timers[id])).length;
-
-  // solar-pro4の重複をAssistantとResearchに適切に配分
-  let solarCount = 0;
-
-  const displaySessions = sessionIds.filter((id) => {
-    const isBusy = Boolean(busyBySession[id]) || Boolean(timers[id]);
-    const info = resolveSessionInfo(id);
-    // 稼働中のもの、またはチーム/ボットとして識別されているものを表示
-    return isBusy || (info.name && !info.name.startsWith('Session '));
-  });
+  const activeCount = Object.keys(timers).length;
 
   const filteredActivities = activities.filter((act) => {
     if (filter === 'all') return true;
@@ -438,7 +302,7 @@ function AgentActivityPane() {
         ]
       }),
 
-      // 2. セッション一覧（本家ボットリスト風デザイン）
+      // 2. エージェント一覧（重複ゼロ・固定ロスター）
       jsxs('div', {
         style: {
           display: 'flex',
@@ -446,7 +310,7 @@ function AgentActivityPane() {
           padding: '4px 8px',
           gap: '2px'
         },
-        children: displaySessions.length === 0
+        children: roster.length === 0
           ? jsx('div', {
               style: {
                 padding: '12px 8px',
@@ -454,32 +318,42 @@ function AgentActivityPane() {
                 color: '#8e8e93',
                 fontSize: '11px'
               },
-              children: 'アクティブなセッションはありません'
+              children: 'エージェントを読み込み中...'
             })
-          : displaySessions.map((sessionId, index) => {
-              const shortId = sessionId ? (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId) : 'unknown';
-              const isBusy = Boolean(busyBySession[sessionId]) || Boolean(timers[sessionId]);
-              const isFocused = sessionId === focusedSessionId;
-              const elapsed = timers[sessionId]?.elapsed || 0;
-              const info = resolveSessionInfo(sessionId);
+          : roster.map((bot, index) => {
+              const botName = bot.name;
+              const isBusy = Boolean(timers[botName]);
+              const elapsed = timers[botName]?.elapsed || 0;
+              const isFocused = focusedProfileName === botName;
+              const bState = botStates[botName] || {};
               
-              // 2つ目のsolar-pro4（Assistant重複）をResearchに補正
-              let displayName = info.name;
-              let displayAvatar = info.avatarImg;
-              if (info.modelName === 'solar-pro4') {
-                solarCount++;
-                if (solarCount % 2 === 0) {
-                  displayName = 'Research';
-                  displayAvatar = botAvatars['research'] || displayAvatar;
-                }
+              // 表示名
+              let displayName = bot.display_name || bot.name || 'Agent';
+              if (displayName.toLowerCase() === 'default') displayName = 'Hermes';
+              else displayName = displayName.charAt(0).toUpperCase() + displayName.slice(1);
+
+              // モデル名
+              let rawModel = bState.model || bot.model || '';
+              let modelName = '';
+              if (rawModel) {
+                const parts = rawModel.split('/');
+                modelName = parts[parts.length - 1].replace(/:free$/i, '');
               }
 
-              // アバターカラーをインデックスに基づいて生成
+              // アバター画像
+              const avatarImg = botAvatars[botName] || bot.avatar || null;
+              const avatarChar = displayName.slice(0, 1).toUpperCase();
+
+              // 指示元バッジ
+              const originTag = bState.isTeam ? '👥 Team Chat' : '👤 Direct';
+              const originColor = bState.isTeam ? '#8b5cf6' : '#10b981';
+
+              // アバターカラー
               const colors = ['#6366f1', '#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'];
               const avatarBg = colors[index % colors.length];
 
               return jsxs('div', {
-                key: sessionId,
+                key: botName,
                 style: {
                   display: 'flex',
                   alignItems: 'center',
@@ -510,9 +384,9 @@ function AgentActivityPane() {
                       overflow: 'visible'
                     },
                     children: [
-                      displayAvatar
+                      avatarImg
                         ? jsx('img', {
-                            src: displayAvatar,
+                            src: avatarImg,
                             alt: displayName,
                             style: {
                               width: '100%',
@@ -521,8 +395,8 @@ function AgentActivityPane() {
                               objectFit: 'cover'
                             }
                           })
-                        : jsx('span', { children: isBusy ? '⚡' : info.avatarChar }),
-                      // 稼働中インジケータ
+                        : jsx('span', { children: isBusy ? '⚡' : avatarChar }),
+                      // 稼働中インジケータ（緑のパルス）
                       jsx('span', {
                         style: {
                           position: 'absolute',
@@ -533,6 +407,7 @@ function AgentActivityPane() {
                           borderRadius: '50%',
                           backgroundColor: isBusy ? '#10b981' : '#c7c7cc',
                           border: '2px solid #ffffff',
+                          boxShadow: isBusy ? '0 0 6px rgba(16, 185, 129, 0.8)' : 'none',
                           zIndex: 2
                         }
                       })
@@ -580,10 +455,10 @@ function AgentActivityPane() {
                                   padding: '1px 5px',
                                   borderRadius: '4px',
                                   backgroundColor: `rgba(0, 0, 0, 0.04)`,
-                                  color: info.originColor,
+                                  color: originColor,
                                   letterSpacing: '0.02em'
                                 },
-                                children: info.originTag
+                                children: originTag
                               })
                             ]
                           }),
@@ -617,9 +492,9 @@ function AgentActivityPane() {
                             },
                             children: isBusy
                               ? `● 推論中 (${elapsed}s 経過)`
-                              : (info.originTag.includes('Team') ? 'Team Room' : `ID: ${shortId}`)
+                              : (bState.isTeam ? 'Team Room' : 'Direct Chat')
                           }),
-                          info.modelName && jsx('span', {
+                          modelName && jsx('span', {
                             style: {
                               fontSize: '9px',
                               fontWeight: '600',
@@ -631,7 +506,7 @@ function AgentActivityPane() {
                               letterSpacing: '0.02em',
                               flexShrink: 0
                             },
-                            children: info.modelName
+                            children: modelName
                           })
                         ]
                       })
