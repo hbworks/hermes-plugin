@@ -9,6 +9,8 @@ import React, { useState, useEffect, useRef } from 'react';
 function AgentActivityPane() {
   const busyBySession = useValue(host.state.busyBySession) || {};
   const focusedSessionId = useValue(host.state.focusedSessionId);
+  const focusedProfileAtom = host.state.focusedSessionProfile || host.state.profile;
+  const focusedProfileName = useValue(focusedProfileAtom) || 'default';
   
   const [activities, setActivities] = useState([]);
   const [sessionMeta, setSessionMeta] = useState({});
@@ -18,17 +20,17 @@ function AgentActivityPane() {
   const [timers, setTimers] = useState({});
   const timerRef = useRef({});
 
-  // 1. プロファイル（ボット）一覧とアバター画像の取得
+  // 1. プロファイル（ボット）一覧、アバター画像、各ボットのセッション一覧の取得
   useEffect(() => {
     let isMounted = true;
 
-    const fetchProfilesAndAvatars = async () => {
+    const syncRosterAndSessions = async () => {
       try {
         if (typeof host?.request !== 'function') return;
 
+        // 全プロファイルの取得
         const res = await host.request('profiles.list', {});
         const profiles = Array.isArray(res?.profiles) ? res.profiles : [];
-        
         if (!isMounted) return;
 
         const pMap = {};
@@ -40,30 +42,53 @@ function AgentActivityPane() {
             }
           }
         }
-        setBotProfiles(pMap);
 
-        // 各ボットのアバター画像を取得
+        // 各ボットのアバター画像とセッションリストを取得
         for (const p of profiles) {
-          if (p?.name && p?.has_avatar) {
-            host.request('profiles.get_asset', { name: p.name, asset: 'avatar' })
+          const botName = p.name;
+          if (!botName) continue;
+
+          // アバター取得
+          if (p.has_avatar || p.avatar) {
+            host.request('profiles.get_asset', { name: botName, asset: 'avatar' })
               .then((assetRes) => {
                 if (assetRes?.found && assetRes?.data && isMounted) {
                   setBotAvatars((prev) => ({
                     ...prev,
-                    [p.name]: assetRes.data
+                    [botName]: assetRes.data
                   }));
                 }
               })
               .catch(() => {});
           }
+
+          // 各プロファイルのセッション一覧を取得してセッションIDを紐付け
+          host.request('session.list', { profile: botName, limit: 20, include_hidden: true })
+            .then((sessRes) => {
+              const rows = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
+              if (isMounted && rows.length > 0) {
+                setBotProfiles((prev) => {
+                  const next = { ...prev };
+                  for (const s of rows) {
+                    if (s?.id) {
+                      next[s.id] = p;
+                    }
+                  }
+                  return next;
+                });
+              }
+            })
+            .catch(() => {});
         }
+
+        setBotProfiles((prev) => ({ ...pMap, ...prev }));
       } catch (err) {
-        console.debug('[AgentMonitor] profiles.list not available:', err);
+        console.debug('[AgentMonitor] sync error:', err);
       }
     };
 
-    fetchProfilesAndAvatars();
-    const interval = setInterval(fetchProfilesAndAvatars, 10000); // 10秒ごとにプロファイル同期
+    syncRosterAndSessions();
+    const interval = setInterval(syncRosterAndSessions, 8000); // 8秒ごとに最新化
 
     return () => {
       isMounted = false;
@@ -73,15 +98,36 @@ function AgentActivityPane() {
 
   // セッションIDから表示名・アバター・サブテキストを決定
   const resolveSessionInfo = (sessionId) => {
+    const isFocused = sessionId === focusedSessionId;
     const meta = sessionMeta[sessionId] || {};
-    const profile = botProfiles[sessionId] || (meta.botName && botProfiles[meta.botName]) || (meta.agentName && botProfiles[meta.agentName]) || null;
+    
+    // プロファイルの解決優先順位：
+    // 1. セッションIDマッピング
+    // 2. 選択中セッションなら focusedProfileName
+    // 3. イベントから抽出した botName / agentName
+    let profile = botProfiles[sessionId] || null;
+    if (!profile && isFocused && focusedProfileName) {
+      profile = botProfiles[focusedProfileName] || { name: focusedProfileName, display_name: focusedProfileName };
+    }
+    if (!profile && meta.botName) {
+      profile = botProfiles[meta.botName] || null;
+    }
+
     const shortId = sessionId ? (sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId) : 'unknown';
     
-    // エージェント名（プロファイルの表示名 > イベントのメタ > 短縮ID）
-    const name = profile?.display_name || profile?.name || meta.agentName || meta.botName || meta.profileName || `Session ${shortId}`;
-    const subtitle = meta.lastActivity || meta.title || profile?.title || (profile?.model ? profile.model.split('/').pop() : `ID: ${shortId}`);
-    const botKey = profile?.name || meta.botName || meta.agentName;
+    // 表示名
+    let name = profile?.display_name || profile?.name || meta.agentName || meta.botName;
+    if (name) {
+      // "default" は "Hermes" として表示
+      if (name.toLowerCase() === 'default') name = 'Hermes';
+      else name = name.charAt(0).toUpperCase() + name.slice(1);
+    } else {
+      name = `Session ${shortId}`;
+    }
+
+    const botKey = profile?.name || (name && name !== `Session ${shortId}` ? name.toLowerCase() : null);
     const avatarImg = (botKey && botAvatars[botKey]) || profile?.avatar || null;
+    const subtitle = meta.lastActivity || meta.title || profile?.title || (profile?.model ? profile.model.split('/').pop() : `ID: ${shortId}`);
     const avatarChar = name.replace(/^Session\s+/i, '').slice(0, 1).toUpperCase();
 
     return {
