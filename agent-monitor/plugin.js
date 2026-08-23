@@ -172,6 +172,7 @@ function AgentActivityPane() {
             textChunk = payload.text;
           } else if (payload?.content) {
             textChunk = typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content);
+          }
           const isDelta = eventType.includes('delta') || eventType.includes('stream') || eventType.includes('chunk');
 
           // 推論・生成中イベントの厳密判定
