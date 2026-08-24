@@ -20,6 +20,9 @@ function AgentActivityPane() {
   const [timers, setTimers] = useState({});
   const timerRef = useRef({});
   const lastActiveMapRef = useRef({});
+  const agentStatusMapRef = useRef({});
+  const rosterRef = useRef([]);
+  const sessionBotMapRef = useRef({});
 
   // 1. プロファイル（ボット）一覧とアバター画像の取得
   useEffect(() => {
@@ -43,6 +46,7 @@ function AgentActivityPane() {
         });
 
         setRoster(sorted);
+        rosterRef.current = sorted;
 
         // 各ボットのアバター画像と最新セッション・モデルを取得
         for (const p of sorted) {
@@ -72,13 +76,19 @@ function AgentActivityPane() {
                 const latest = rows[0];
                 const teamSession = rows.find((r) => (r.title || '').toLowerCase().includes('team') || (r.title || '').toLowerCase().includes('group:'));
                 const activeSess = teamSession || latest;
+                const isTeam = Boolean(teamSession);
+
+                // ダイレクト（1:1）セッションのみボットと1対1でマップ
+                if (!isTeam && latest?.id) {
+                  sessionBotMapRef.current[latest.id] = botName;
+                }
 
                 setBotStates((prev) => ({
                   ...prev,
                   [botName]: {
                     model: activeSess?.model || p.model || '',
                     lastSessionId: activeSess?.id,
-                    isTeam: Boolean(teamSession),
+                    isTeam: isTeam,
                     title: activeSess?.title || ''
                   }
                 }));
@@ -100,35 +110,44 @@ function AgentActivityPane() {
     };
   }, []);
 
-  // 2. 各ボットの稼働タイマー計算
+  // 2. 各ボットの稼働タイマー計算（推論中・ツール実行中・出力中の管理）
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
-      const nextTimers = { ...timerRef.current };
-      const anySessionBusy = Object.values(busyBySession).some(Boolean);
+      const nextTimers = {};
 
       for (const bot of roster) {
         const botName = bot.name;
         const bState = botStates[botName] || {};
+        const curStatus = agentStatusMapRef.current[botName];
         const lastActive = lastActiveMapRef.current[botName] || 0;
         
-        // 1. 直近4秒以内に推論・ツールイベントを受信した
-        const eventBusy = (now - lastActive < 4000);
-        // 2. このボットのセッション、またはフォーカス中かつGateway全体がbusy
-        const sessBusy = bState.lastSessionId ? Boolean(busyBySession[bState.lastSessionId]) : false;
-        const focusBusy = (focusedProfileName === botName) && anySessionBusy;
+        // 1. 直近4秒以内に該当ボットのイベントを受信した
+        const eventBusy = (now - lastActive < 4000) && Boolean(curStatus);
+        // 2. 該当ボット専有の1:1ダイレクトセッションがbusy
+        const directSessBusy = (!bState.isTeam && bState.lastSessionId) ? Boolean(busyBySession[bState.lastSessionId]) : false;
 
-        const isBusy = eventBusy || sessBusy || focusBusy;
-
-        if (isBusy) {
-          if (!nextTimers[botName]) {
-            nextTimers[botName] = { start: now, elapsed: 0 };
-          } else {
-            nextTimers[botName].elapsed = Math.floor((now - nextTimers[botName].start) / 1000);
-          }
+        if (eventBusy) {
+          const startTime = curStatus.start || now;
+          nextTimers[botName] = {
+            status: curStatus.status,
+            toolName: curStatus.toolName,
+            start: startTime,
+            elapsed: Math.floor((now - startTime) / 1000)
+          };
+        } else if (directSessBusy) {
+          const prev = timerRef.current[botName];
+          const startTime = prev?.start || now;
+          nextTimers[botName] = {
+            status: prev?.status || 'thinking',
+            toolName: prev?.toolName || '',
+            start: startTime,
+            elapsed: Math.floor((now - startTime) / 1000)
+          };
         } else {
-          if (nextTimers[botName]) {
-            delete nextTimers[botName];
+          // 期限切れでクリア
+          if (agentStatusMapRef.current[botName] && (now - lastActive >= 4000)) {
+            delete agentStatusMapRef.current[botName];
           }
         }
       }
@@ -137,7 +156,7 @@ function AgentActivityPane() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [roster, botStates, busyBySession, focusedProfileName]);
+  }, [roster, botStates, busyBySession]);
 
   // 3. Gateway イベントのリアルタイム購読 (host.onEvent)
   useEffect(() => {
@@ -169,18 +188,40 @@ function AgentActivityPane() {
           
           const sid = event.sessionId || event.session_id || event.session || event.sid || payload?.sessionId || payload?.session_id;
           
-          // チームチャットや各種イベントからプロファイル名を確実に抽出
-          let rawProfile = (
-            event.profile ||
-            payload?.profile ||
-            payload?.member ||
-            payload?.speaker ||
-            payload?.from?.name ||
-            payload?.agentName ||
-            payload?.bot ||
-            event.speaker ||
-            ''
-          ).toLowerCase();
+          // エージェント名・プロファイル名の多角的な特定
+          let rawProfile = '';
+          const candidateFields = [
+            event.profile,
+            event.profile_name,
+            event.agent,
+            event.agent_name,
+            event.bot,
+            event.speaker,
+            event.sender,
+            payload?.profile,
+            payload?.profile_name,
+            payload?.agent,
+            payload?.agent_name,
+            payload?.agentName,
+            payload?.bot,
+            payload?.speaker,
+            payload?.member,
+            payload?.author,
+            payload?.sender,
+            payload?.role,
+            payload?.name,
+            payload?.from?.name,
+            payload?.from?.profile,
+            typeof payload?.from === 'string' ? payload?.from : null,
+            payload?.actor
+          ];
+
+          for (const cand of candidateFields) {
+            if (cand && typeof cand === 'string' && cand.trim()) {
+              rawProfile = cand.trim().toLowerCase();
+              break;
+            }
+          }
 
           // ログアイテムのテキスト抽出
           let textChunk = '';
@@ -193,14 +234,53 @@ function AgentActivityPane() {
           }
           const isDelta = eventType.includes('delta') || eventType.includes('stream') || eventType.includes('chunk');
 
-          // 推論・生成中イベントの厳密判定
+          // プロファイル未特定の場合、イベント文字列やセッションマップから照合
+          if (!rawProfile && rosterRef.current && rosterRef.current.length > 0) {
+            const rawEventStr = `${eventType} ${textChunk} ${typeof payload === 'object' ? JSON.stringify(payload) : String(payload)}`.toLowerCase();
+            for (const bot of rosterRef.current) {
+              const bName = bot.name.toLowerCase();
+              if (bName !== 'default' && (
+                rawEventStr.includes(`"${bName}"`) ||
+                rawEventStr.includes(`${bName} is thinking`) ||
+                rawEventStr.includes(`[${bName}]`) ||
+                rawEventStr.includes(`@${bName}`) ||
+                rawEventStr.includes(`${bName}:`)
+              )) {
+                rawProfile = bName;
+                break;
+              }
+            }
+          }
+
+          // それでも未特定でダイレクトセッションIDが存在する場合はマッピングから取得
+          if (!rawProfile && sid && sessionBotMapRef.current[sid]) {
+            rawProfile = sessionBotMapRef.current[sid];
+          }
+
+          // 状態の厳密判定（ツール実行中 / 推論中 / 出力中 / 完了）
+          const isToolEvent = eventType.includes('tool') || 
+            eventType.includes('exec') || 
+            eventType.includes('action') || 
+            Boolean(payload?.tool || payload?.tool_call || payload?.function);
+
+          let toolName = '';
+          if (isToolEvent) {
+            toolName = payload?.tool?.name || payload?.tool || payload?.name || payload?.function?.name || payload?.action || 'tool';
+            if (typeof toolName !== 'string') toolName = 'tool';
+          }
+
           const isThinkingEvent = eventType.includes('reason') || 
-            eventType.includes('delta') || 
-            eventType.includes('tool') || 
-            eventType.includes('turn.start') || 
-            eventType.includes('step') ||
-            eventType.includes('working') ||
-            Boolean(textChunk && isDelta);
+            eventType.includes('think') || 
+            eventType.includes('thought') ||
+            Boolean(payload?.reasoning) ||
+            Boolean(payload?.thought) ||
+            eventType.includes('turn.start');
+
+          const isGeneratingEvent = isDelta || 
+            eventType.includes('stream') || 
+            eventType.includes('chunk') || 
+            eventType.includes('message') ||
+            Boolean(textChunk && !isThinkingEvent && !isToolEvent);
 
           const isFinishedEvent = eventType.includes('finish') || 
             eventType.includes('end') || 
@@ -209,18 +289,54 @@ function AgentActivityPane() {
 
           const now = Date.now();
           if (rawProfile) {
-            if (isThinkingEvent && !isFinishedEvent) {
-              lastActiveMapRef.current[rawProfile] = now;
-            } else if (isFinishedEvent) {
+            if (isFinishedEvent) {
               lastActiveMapRef.current[rawProfile] = 0;
+              if (agentStatusMapRef.current[rawProfile]) {
+                delete agentStatusMapRef.current[rawProfile];
+              }
+            } else if (isToolEvent) {
+              lastActiveMapRef.current[rawProfile] = now;
+              const prev = agentStatusMapRef.current[rawProfile];
+              agentStatusMapRef.current[rawProfile] = {
+                status: 'tool',
+                toolName: toolName || prev?.toolName || 'tool',
+                start: prev?.start || now,
+                lastActive: now
+              };
+            } else if (isThinkingEvent) {
+              lastActiveMapRef.current[rawProfile] = now;
+              const prev = agentStatusMapRef.current[rawProfile];
+              agentStatusMapRef.current[rawProfile] = {
+                status: 'thinking',
+                toolName: '',
+                start: prev?.start || now,
+                lastActive: now
+              };
+            } else if (isGeneratingEvent) {
+              lastActiveMapRef.current[rawProfile] = now;
+              const prev = agentStatusMapRef.current[rawProfile];
+              agentStatusMapRef.current[rawProfile] = {
+                status: 'generating',
+                toolName: '',
+                start: prev?.start || now,
+                lastActive: now
+              };
             }
-          } else if (isThinkingEvent && !isFinishedEvent && focusedProfileName) {
-            // プロファイル未記載だが推論中の場合はフォーカス中ボットに適用
-            lastActiveMapRef.current[focusedProfileName] = now;
-            rawProfile = focusedProfileName;
           }
 
-          const detailStr = textChunk || (typeof payload === 'object' ? JSON.stringify(payload, null, 2) : String(payload));
+          let detailStr = '';
+          if (eventType.includes('session.info') || (eventType.startsWith('session') && (payload?.model || payload?.provider || payload?.reasoning_effort))) {
+            const cleanInfo = {};
+            if (payload?.model) cleanInfo.model = payload.model;
+            if (payload?.provider) cleanInfo.provider = payload.provider;
+            if (payload?.reasoning_effort) cleanInfo.reasoning_effort = payload.reasoning_effort;
+            
+            if (Object.keys(cleanInfo).length > 0) {
+              detailStr = JSON.stringify(cleanInfo, null, 2);
+            }
+          } else {
+            detailStr = textChunk || (typeof payload === 'object' ? JSON.stringify(payload, null, 2) : String(payload));
+          }
           
           // 内容が空（{} や空文字、null等）の無意味なイベントはログに追加しない
           if (!detailStr || detailStr.trim() === '{}' || detailStr.trim() === '""' || detailStr === 'null' || detailStr === 'undefined') {
@@ -266,7 +382,7 @@ function AgentActivityPane() {
     if (filter === 'all') return true;
     if (filter === 'busy') {
       const t = act.type?.toLowerCase() || '';
-      return t.includes('think') || t.includes('tool') || t.includes('run') || t.includes('step') || t.includes('turn');
+      return t.includes('think') || t.includes('reason') || t.includes('tool') || t.includes('run') || t.includes('step') || t.includes('turn') || t.includes('delta') || t.includes('stream');
     }
     return act.type?.toLowerCase().includes(filter);
   });
@@ -348,8 +464,11 @@ function AgentActivityPane() {
             })
           : roster.map((bot, index) => {
               const botName = bot.name;
-              const isBusy = Boolean(timers[botName]);
-              const elapsed = timers[botName]?.elapsed || 0;
+              const timerInfo = timers[botName];
+              const isBusy = Boolean(timerInfo);
+              const elapsed = timerInfo?.elapsed || 0;
+              const statusType = timerInfo?.status || 'idle';
+              const toolName = timerInfo?.toolName || '';
               const isFocused = focusedProfileName === botName;
               const bState = botStates[botName] || {};
               
@@ -373,6 +492,29 @@ function AgentActivityPane() {
               // 指示元バッジ
               const originTag = bState.isTeam ? '👥 Team Chat' : '👤 Direct';
               const originColor = bState.isTeam ? '#8b5cf6' : '#10b981';
+
+              // ステータスに応じた色・ラベル・アイコン
+              let statusColor = '#8e8e93';
+              let statusLabel = bState.isTeam ? 'Team Room' : 'Direct Chat';
+              let statusIcon = '';
+              let pulseColor = '#c7c7cc';
+
+              if (statusType === 'thinking') {
+                statusColor = '#10b981'; // 緑
+                pulseColor = '#10b981';
+                statusIcon = '●';
+                statusLabel = `● 推論中 (${elapsed}s 経過)`;
+              } else if (statusType === 'tool') {
+                statusColor = '#8b5cf6'; // 紫
+                pulseColor = '#8b5cf6';
+                statusIcon = '⚡';
+                statusLabel = `⚡ ツール実行中: ${toolName || 'tool'} (${elapsed}s)`;
+              } else if (statusType === 'generating') {
+                statusColor = '#3b82f6'; // 青
+                pulseColor = '#3b82f6';
+                statusIcon = '✍️';
+                statusLabel = `✍️ 出力中 (${elapsed}s 経過)`;
+              }
 
               // アバターカラー
               const colors = ['#6366f1', '#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'];
@@ -399,7 +541,7 @@ function AgentActivityPane() {
                       height: '32px',
                       minWidth: '32px',
                       borderRadius: '50%',
-                      background: isBusy ? '#10b981' : avatarBg,
+                      background: isBusy ? pulseColor : avatarBg,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -407,7 +549,8 @@ function AgentActivityPane() {
                       fontWeight: '600',
                       fontSize: '12px',
                       boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                      overflow: 'visible'
+                      overflow: 'visible',
+                      transition: 'background-color 0.2s ease'
                     },
                     children: [
                       avatarImg
@@ -421,8 +564,8 @@ function AgentActivityPane() {
                               objectFit: 'cover'
                             }
                           })
-                        : jsx('span', { children: isBusy ? '⚡' : avatarChar }),
-                      // 稼働中インジケータ（緑のパルス）
+                        : jsx('span', { children: isBusy ? (statusIcon || '⚡') : avatarChar }),
+                      // 稼働中インジケータ（状態別カラー）
                       jsx('span', {
                         style: {
                           position: 'absolute',
@@ -431,10 +574,11 @@ function AgentActivityPane() {
                           width: '9px',
                           height: '9px',
                           borderRadius: '50%',
-                          backgroundColor: isBusy ? '#10b981' : '#c7c7cc',
+                          backgroundColor: isBusy ? pulseColor : '#c7c7cc',
                           border: '2px solid #ffffff',
-                          boxShadow: isBusy ? '0 0 6px rgba(16, 185, 129, 0.8)' : 'none',
-                          zIndex: 2
+                          boxShadow: isBusy ? `0 0 6px ${pulseColor}` : 'none',
+                          zIndex: 2,
+                          transition: 'background-color 0.2s ease, box-shadow 0.2s ease'
                         }
                       })
                     ]
@@ -491,7 +635,7 @@ function AgentActivityPane() {
                           jsx('span', {
                             style: {
                               fontSize: '10px',
-                              color: isBusy ? '#059669' : '#8e8e93',
+                              color: isBusy ? statusColor : '#8e8e93',
                               fontWeight: isBusy ? '600' : '400'
                             },
                             children: isBusy ? `${elapsed}s` : 'idle'
@@ -510,15 +654,14 @@ function AgentActivityPane() {
                           jsx('span', {
                             style: {
                               fontSize: '11px',
-                              color: isBusy ? '#059669' : '#8e8e93',
+                              color: isBusy ? statusColor : '#8e8e93',
+                              fontWeight: isBusy ? '500' : '400',
                               whiteSpace: 'nowrap',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               flex: 1
                             },
-                            children: isBusy
-                              ? `● 推論中 (${elapsed}s 経過)`
-                              : (bState.isTeam ? 'Team Room' : 'Direct Chat')
+                            children: statusLabel
                           }),
                           modelName && jsx('span', {
                             style: {
