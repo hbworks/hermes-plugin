@@ -149,6 +149,24 @@ function AgentActivityPane() {
           const timestamp = new Date().toLocaleTimeString('ja-JP', { hour12: false });
           const eventType = (event.type || event.event || 'gateway.event').toLowerCase();
           const payload = event.payload ?? event.data ?? event.message ?? event;
+
+          // システム初期化、内部状態通知（sessions.changed等）、skin/CSS等のノイズを除外
+          if (
+            eventType.startsWith('gateway.') ||
+            eventType.startsWith('sessions.') ||
+            eventType.startsWith('profiles.') ||
+            eventType.startsWith('skin.') ||
+            eventType.startsWith('theme.') ||
+            payload?.skin ||
+            payload?.colors
+          ) {
+            // ただし推論・ツール・メッセージなどの実アクティビティが含まれる場合は例外として通す
+            const hasActivity = payload?.text || payload?.content || payload?.delta || payload?.tool || payload?.error;
+            if (!hasActivity) {
+              return;
+            }
+          }
+          
           const sid = event.sessionId || event.session_id || event.session || event.sid || payload?.sessionId || payload?.session_id;
           
           // チームチャットや各種イベントからプロファイル名を確実に抽出
@@ -202,6 +220,13 @@ function AgentActivityPane() {
             rawProfile = focusedProfileName;
           }
 
+          const detailStr = textChunk || (typeof payload === 'object' ? JSON.stringify(payload, null, 2) : String(payload));
+          
+          // 内容が空（{} や空文字、null等）の無意味なイベントはログに追加しない
+          if (!detailStr || detailStr.trim() === '{}' || detailStr.trim() === '""' || detailStr === 'null' || detailStr === 'undefined') {
+            return;
+          }
+
           setActivities((prev) => {
             const last = prev[0];
             if (isDelta && last && last.type === eventType && last.profile === rawProfile && textChunk) {
@@ -219,7 +244,7 @@ function AgentActivityPane() {
               type: eventType,
               sessionId: sid,
               profile: rawProfile,
-              detail: textChunk || (typeof payload === 'object' ? JSON.stringify(payload, null, 2) : String(payload))
+              detail: detailStr
             };
 
             return [newEvent, ...prev.slice(0, 99)];
