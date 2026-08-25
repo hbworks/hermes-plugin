@@ -87,6 +87,7 @@ function AgentActivityPane() {
                   ...prev,
                   [botName]: {
                     model: activeSess?.model || p.model || '',
+                    provider: activeSess?.provider || p.provider || '',
                     lastSessionId: activeSess?.id,
                     isTeam: isTeam,
                     title: activeSess?.title || ''
@@ -331,6 +332,18 @@ function AgentActivityPane() {
             if (payload?.provider) cleanInfo.provider = payload.provider;
             if (payload?.reasoning_effort) cleanInfo.reasoning_effort = payload.reasoning_effort;
             
+            // 対象ボットのモデル・プロバイダー情報を最新化
+            if (rawProfile) {
+              setBotStates((prev) => ({
+                ...prev,
+                [rawProfile]: {
+                  ...(prev[rawProfile] || {}),
+                  ...(payload?.model ? { model: payload.model } : {}),
+                  ...(payload?.provider ? { provider: payload.provider } : {})
+                }
+              }));
+            }
+
             if (Object.keys(cleanInfo).length > 0) {
               detailStr = JSON.stringify(cleanInfo, null, 2);
             }
@@ -477,12 +490,18 @@ function AgentActivityPane() {
               if (displayName.toLowerCase() === 'default') displayName = 'Hermes';
               else displayName = displayName.charAt(0).toUpperCase() + displayName.slice(1);
 
-              // モデル名
+              // モデル名とプロバイダー名
               let rawModel = bState.model || bot.model || '';
+              let providerName = bState.provider || '';
               let modelName = '';
               if (rawModel) {
                 const parts = rawModel.split('/');
-                modelName = parts[parts.length - 1].replace(/:free$/i, '');
+                if (parts.length > 1) {
+                  if (!providerName) providerName = parts[0];
+                  modelName = parts[parts.length - 1].replace(/:free$/i, '');
+                } else {
+                  modelName = rawModel.replace(/:free$/i, '');
+                }
               }
 
               // アバター画像
@@ -663,19 +682,41 @@ function AgentActivityPane() {
                             },
                             children: statusLabel
                           }),
-                          modelName && jsx('span', {
+                          jsxs('div', {
                             style: {
-                              fontSize: '9px',
-                              fontWeight: '600',
-                              padding: '1px 5px',
-                              borderRadius: '3px',
-                              background: 'rgba(99, 102, 241, 0.08)',
-                              color: '#6366f1',
-                              fontFamily: 'ui-monospace, monospace',
-                              letterSpacing: '0.02em',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
                               flexShrink: 0
                             },
-                            children: modelName
+                            children: [
+                              providerName && jsx('span', {
+                                style: {
+                                  fontSize: '9px',
+                                  fontWeight: '500',
+                                  padding: '1px 5px',
+                                  borderRadius: '3px',
+                                  background: 'rgba(0, 0, 0, 0.05)',
+                                  color: '#6e6e73',
+                                  fontFamily: 'ui-monospace, monospace',
+                                  letterSpacing: '0.02em'
+                                },
+                                children: providerName
+                              }),
+                              modelName && jsx('span', {
+                                style: {
+                                  fontSize: '9px',
+                                  fontWeight: '600',
+                                  padding: '1px 5px',
+                                  borderRadius: '3px',
+                                  background: 'rgba(99, 102, 241, 0.08)',
+                                  color: '#6366f1',
+                                  fontFamily: 'ui-monospace, monospace',
+                                  letterSpacing: '0.02em'
+                                },
+                                children: modelName
+                              })
+                            ]
                           })
                         ]
                       })
