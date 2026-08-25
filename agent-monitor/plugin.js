@@ -73,12 +73,11 @@ function AgentActivityPane() {
             .then((sessRes) => {
               const rows = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
               if (isMounted && rows.length > 0) {
+                // 最新のセッション（時系列で一番新しい会話）を基準に判定
                 const latest = rows[0];
-                const teamSession = rows.find((r) => (r.title || '').toLowerCase().includes('team') || (r.title || '').toLowerCase().includes('group:'));
-                const activeSess = teamSession || latest;
-                const isTeam = Boolean(teamSession);
+                const latestTitle = (latest?.title || '').toLowerCase();
+                const isTeam = latestTitle.includes('group:') || latestTitle.includes('team');
 
-                // ダイレクト（1:1）セッションのみボットと1対1でマップ
                 if (!isTeam && latest?.id) {
                   sessionBotMapRef.current[latest.id] = botName;
                 }
@@ -86,11 +85,11 @@ function AgentActivityPane() {
                 setBotStates((prev) => ({
                   ...prev,
                   [botName]: {
-                    model: activeSess?.model || p.model || '',
-                    provider: activeSess?.provider || p.provider || '',
-                    lastSessionId: activeSess?.id,
+                    model: latest?.model || p.model || '',
+                    provider: latest?.provider || p.provider || '',
+                    lastSessionId: latest?.id,
                     isTeam: isTeam,
-                    title: activeSess?.title || ''
+                    title: latest?.title || ''
                   }
                 }));
               }
@@ -123,12 +122,24 @@ function AgentActivityPane() {
         const curStatus = agentStatusMapRef.current[botName];
         const lastActive = lastActiveMapRef.current[botName] || 0;
         
-        // 1. 直近4秒以内に該当ボットのイベントを受信した
-        const eventBusy = (now - lastActive < 4000) && Boolean(curStatus);
-        // 2. 該当ボット専有の1:1ダイレクトセッションがbusy
+        // ツール完了状態は3秒間キープ
+        const isToolCompleted = curStatus?.status === 'tool_completed' && (now - (curStatus.completedAt || 0) < 3000);
+        
+        // 推論中・実行中・出力中は15秒間キープ（クラウドのレスポンス待ちや長考に対応）
+        const eventBusy = (now - lastActive < 15000) && Boolean(curStatus) && !curStatus.isFinished;
+        
+        // 該当ボット専有の1:1ダイレクトセッションがbusy
         const directSessBusy = (!bState.isTeam && bState.lastSessionId) ? Boolean(busyBySession[bState.lastSessionId]) : false;
 
-        if (eventBusy) {
+        if (isToolCompleted) {
+          nextTimers[botName] = {
+            status: 'tool_completed',
+            toolName: curStatus.toolName,
+            duration: curStatus.duration,
+            start: curStatus.start,
+            elapsed: curStatus.duration || 1
+          };
+        } else if (eventBusy) {
           const startTime = curStatus.start || now;
           nextTimers[botName] = {
             status: curStatus.status,
@@ -146,8 +157,8 @@ function AgentActivityPane() {
             elapsed: Math.floor((now - startTime) / 1000)
           };
         } else {
-          // 期限切れでクリア
-          if (agentStatusMapRef.current[botName] && (now - lastActive >= 4000)) {
+          // タイムアウトでクリア
+          if (agentStatusMapRef.current[botName] && (now - lastActive >= 15000)) {
             delete agentStatusMapRef.current[botName];
           }
         }
@@ -258,35 +269,55 @@ function AgentActivityPane() {
             rawProfile = sessionBotMapRef.current[sid];
           }
 
-          // 状態の厳密判定（ツール実行中 / 推論中 / 出力中 / 完了）
-          const isToolEvent = eventType.includes('tool') || 
+          // 状態の厳密判定（ツール開始 / ツール実行中 / ツール完了 / 推論中 / 出力中）
+          const isToolResultEvent = eventType.includes('tool_result') || 
+            eventType.includes('tool.result') || 
+            eventType.includes('tool_output') || 
+            eventType.includes('tool_response') ||
+            Boolean(payload?.tool_result) || 
+            payload?.role === 'tool' ||
+            eventType === 'tool_result';
+
+          const isToolCallEvent = !isToolResultEvent && (
+            eventType.includes('tool_call') || 
+            eventType.includes('tool.start') || 
+            eventType.includes('tool_start') ||
+            eventType.includes('tool') || 
             eventType.includes('exec') || 
             eventType.includes('action') || 
-            Boolean(payload?.tool || payload?.tool_call || payload?.function);
+            Boolean(payload?.tool || payload?.tool_call || payload?.function)
+          );
 
           let toolName = '';
-          if (isToolEvent) {
-            toolName = payload?.tool?.name || payload?.tool || payload?.name || payload?.function?.name || payload?.action || 'tool';
+          if (isToolCallEvent || isToolResultEvent) {
+            toolName = payload?.tool?.name || payload?.tool || payload?.name || payload?.function?.name || payload?.action || payload?.tool_name || 'tool';
             if (typeof toolName !== 'string') toolName = 'tool';
           }
 
-          const isThinkingEvent = eventType.includes('reason') || 
+          const isThinkingEvent = !isToolCallEvent && !isToolResultEvent && (
+            eventType.includes('reason') || 
             eventType.includes('think') || 
             eventType.includes('thought') ||
             Boolean(payload?.reasoning) ||
             Boolean(payload?.thought) ||
-            eventType.includes('turn.start');
+            eventType.includes('turn.start')
+          );
 
-          const isGeneratingEvent = isDelta || 
+          const isGeneratingEvent = !isToolCallEvent && !isToolResultEvent && !isThinkingEvent && (
+            isDelta || 
             eventType.includes('stream') || 
             eventType.includes('chunk') || 
             eventType.includes('message') ||
-            Boolean(textChunk && !isThinkingEvent && !isToolEvent);
+            Boolean(textChunk)
+          );
 
-          const isFinishedEvent = eventType.includes('finish') || 
-            eventType.includes('end') || 
-            eventType.includes('stop') || 
-            eventType.includes('complete');
+          const isFinishedEvent = eventType === 'turn.finish' || 
+            eventType === 'turn.end' || 
+            eventType === 'turn.complete' ||
+            eventType === 'chat.complete' ||
+            eventType === 'session.idle' ||
+            eventType.endsWith('.finish') ||
+            eventType.endsWith('.complete');
 
           const now = Date.now();
           if (rawProfile) {
@@ -295,11 +326,25 @@ function AgentActivityPane() {
               if (agentStatusMapRef.current[rawProfile]) {
                 delete agentStatusMapRef.current[rawProfile];
               }
-            } else if (isToolEvent) {
+            } else if (isToolResultEvent) {
               lastActiveMapRef.current[rawProfile] = now;
               const prev = agentStatusMapRef.current[rawProfile];
+              const startT = prev?.start || (now - 1000);
+              const dur = Math.max(1, Math.round((now - startT) / 1000));
               agentStatusMapRef.current[rawProfile] = {
-                status: 'tool',
+                status: 'tool_completed',
+                toolName: toolName || prev?.toolName || 'tool',
+                start: startT,
+                duration: dur,
+                completedAt: now,
+                lastActive: now
+              };
+            } else if (isToolCallEvent) {
+              lastActiveMapRef.current[rawProfile] = now;
+              const prev = agentStatusMapRef.current[rawProfile];
+              const isNew = !prev || prev.status !== 'tool';
+              agentStatusMapRef.current[rawProfile] = {
+                status: isNew ? 'tool_start' : 'tool',
                 toolName: toolName || prev?.toolName || 'tool',
                 start: prev?.start || now,
                 lastActive: now
@@ -307,21 +352,26 @@ function AgentActivityPane() {
             } else if (isThinkingEvent) {
               lastActiveMapRef.current[rawProfile] = now;
               const prev = agentStatusMapRef.current[rawProfile];
-              agentStatusMapRef.current[rawProfile] = {
-                status: 'thinking',
-                toolName: '',
-                start: prev?.start || now,
-                lastActive: now
-              };
+              // ツール完了表示の直後はすぐに上書きせず少し余韻を残す
+              if (!prev || prev.status !== 'tool_completed' || (now - (prev.completedAt || 0) > 2000)) {
+                agentStatusMapRef.current[rawProfile] = {
+                  status: 'thinking',
+                  toolName: '',
+                  start: prev?.start || now,
+                  lastActive: now
+                };
+              }
             } else if (isGeneratingEvent) {
               lastActiveMapRef.current[rawProfile] = now;
               const prev = agentStatusMapRef.current[rawProfile];
-              agentStatusMapRef.current[rawProfile] = {
-                status: 'generating',
-                toolName: '',
-                start: prev?.start || now,
-                lastActive: now
-              };
+              if (!prev || prev.status !== 'tool_completed' || (now - (prev.completedAt || 0) > 2000)) {
+                agentStatusMapRef.current[rawProfile] = {
+                  status: 'generating',
+                  toolName: '',
+                  start: prev?.start || now,
+                  lastActive: now
+                };
+              }
             }
           }
 
@@ -512,7 +562,7 @@ function AgentActivityPane() {
               const originTag = bState.isTeam ? '👥 Team Chat' : '👤 Direct';
               const originColor = bState.isTeam ? '#8b5cf6' : '#10b981';
 
-              // ステータスに応じた色・ラベル・アイコン
+              // ステータスに応じた色・ラベル・アイコン（推論中 / ツール呼出 / ツール実行中 / ツール完了 / 出力中）
               let statusColor = '#8e8e93';
               let statusLabel = bState.isTeam ? 'Team Room' : 'Direct Chat';
               let statusIcon = '';
@@ -523,11 +573,21 @@ function AgentActivityPane() {
                 pulseColor = '#10b981';
                 statusIcon = '●';
                 statusLabel = `● 推論中 (${elapsed}s 経過)`;
+              } else if (statusType === 'tool_start') {
+                statusColor = '#f59e0b'; // オレンジ
+                pulseColor = '#f59e0b';
+                statusIcon = '🚀';
+                statusLabel = `🚀 ツール呼出: ${toolName || 'tool'}`;
               } else if (statusType === 'tool') {
                 statusColor = '#8b5cf6'; // 紫
                 pulseColor = '#8b5cf6';
                 statusIcon = '⚡';
                 statusLabel = `⚡ ツール実行中: ${toolName || 'tool'} (${elapsed}s)`;
+              } else if (statusType === 'tool_completed') {
+                statusColor = '#10b981'; // 緑
+                pulseColor = '#10b981';
+                statusIcon = '✅';
+                statusLabel = `✅ ツール完了: ${toolName || 'tool'} (${timerInfo?.duration || elapsed}s)`;
               } else if (statusType === 'generating') {
                 statusColor = '#3b82f6'; // 青
                 pulseColor = '#3b82f6';
@@ -838,13 +898,19 @@ function AgentActivityPane() {
               let typeIcon = '⚡';
               let badgeColor = '#6366f1';
               const t = act.type.toLowerCase();
-              if (t.includes('reason') || t.includes('think')) {
+              if (t.includes('tool_result') || t.includes('tool.result') || t.includes('tool_output')) {
+                typeIcon = '✅';
+                badgeColor = '#10b981';
+              } else if (t.includes('tool_call') || t.includes('tool.start') || t.includes('tool_start')) {
+                typeIcon = '🚀';
+                badgeColor = '#f59e0b';
+              } else if (t.includes('tool') || t.includes('exec') || t.includes('action')) {
+                typeIcon = '⚡';
+                badgeColor = '#8b5cf6';
+              } else if (t.includes('reason') || t.includes('think') || t.includes('thought')) {
                 typeIcon = '🧠';
                 badgeColor = '#8b5cf6';
-              } else if (t.includes('tool')) {
-                typeIcon = '🛠';
-                badgeColor = '#f59e0b';
-              } else if (t.includes('message') || t.includes('turn')) {
+              } else if (t.includes('message') || t.includes('turn') || t.includes('chunk')) {
                 typeIcon = '💬';
                 badgeColor = '#3b82f6';
               }
