@@ -18,6 +18,7 @@ function AgentActivityPane() {
   const [botStates, setBotStates] = useState({});
   const [filter, setFilter] = useState('all');
   const [timers, setTimers] = useState({});
+  const [hoveredBot, setHoveredBot] = useState(null);
   const timerRef = useRef({});
   const lastActiveMapRef = useRef({});
   const agentStatusMapRef = useRef({});
@@ -53,7 +54,7 @@ function AgentActivityPane() {
           const botName = p.name;
           if (!botName) continue;
 
-          // アバター取得
+          // アバター画像取得
           if (p.has_avatar || p.avatar || !botAvatars[botName]) {
             host.request('profiles.get_asset', { name: botName, asset: 'avatar' })
               .then((assetRes) => {
@@ -64,7 +65,23 @@ function AgentActivityPane() {
               .catch(() => {});
           }
 
-          // 各プロファイルの最新セッション情報を取得してモデルとセッション種別を特定
+          // profiles.list の last_session または canonical_session から初期セッションIDを設定
+          const initSession = p.last_session || p.canonical_session;
+          const initSessionId = initSession?.resolved_id || initSession?.id;
+          if (initSessionId) {
+            setBotStates((prev) => ({
+              ...prev,
+              [botName]: {
+                ...(prev[botName] || {}),
+                model: p.model || '',
+                provider: p.provider || '',
+                lastSessionId: initSessionId,
+                title: initSession?.title || ''
+              }
+            }));
+          }
+
+          // 各プロファイルの最新セッション情報を取得してモデルとセッション種別を特定（常に各プロファイル専用ソケットに問い合わせる）
           const fetchMethod = typeof host?.requestProfile === 'function'
             ? () => host.requestProfile(botName, 'session.list', { limit: 5, include_hidden: true })
             : () => host.request('session.list', { profile: botName, limit: 5, include_hidden: true });
@@ -441,6 +458,113 @@ function AgentActivityPane() {
 
   const activeCount = Object.keys(timers).length;
 
+  // 4. エージェントクリック時のチャット・セッション遷移処理
+  const handleAgentClick = async (botName) => {
+    try {
+      const targetBot = botName || 'default';
+
+      // 1. rosterRef から対象プロファイルの正規セッションIDを取得（他プロファイルの混入を完全防止）
+      const matchedProfile = (rosterRef.current || []).find((p) => p.name === targetBot);
+      let targetSessionId =
+        matchedProfile?.canonical_session?.resolved_id ||
+        matchedProfile?.canonical_session?.id ||
+        matchedProfile?.last_session?.resolved_id ||
+        matchedProfile?.last_session?.id ||
+        botStates[targetBot]?.lastSessionId;
+
+      // キャッシュにない場合、対象プロファイル専用ソケットから即座に取得
+      if (!targetSessionId) {
+        try {
+          let rows = [];
+          if (typeof host?.requestProfile === 'function') {
+            const sessRes = await host.requestProfile(targetBot, 'session.list', { limit: 5, include_hidden: true }).catch(() => null);
+            rows = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
+          } else if (typeof host?.request === 'function') {
+            const sessRes = await host.request('session.list', { profile: targetBot, limit: 5, include_hidden: true }).catch(() => null);
+            rows = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
+          }
+
+          if (rows.length > 0) {
+            targetSessionId = rows[0].resolved_id || rows[0].id;
+          }
+        } catch (e) {
+          console.debug('[AgentMonitor] session.list fetch error:', e);
+        }
+      }
+
+      // 2. セッションが存在する場合はそのセッションをメインチャットに開く
+      if (targetSessionId) {
+        if (typeof host?.openSession === 'function') {
+          try {
+            await host.openSession(targetSessionId, {
+              profile: targetBot,
+              intent: 'main',
+              awaitHydration: true,
+              keepAllProfilesScope: false
+            });
+            return;
+          } catch (openErr) {
+            console.warn('[AgentMonitor] host.openSession fallback:', openErr);
+          }
+        }
+
+        // フォールバック
+        if (typeof host?.ensureAgent === 'function') {
+          await host.ensureAgent(null, targetBot).catch(() => {});
+        }
+        if (typeof window !== 'undefined') {
+          window.location.hash = `#/${targetSessionId}`;
+        }
+        if (typeof host?.navigate === 'function') {
+          host.navigate(`/${targetSessionId}`);
+        }
+        return;
+      }
+
+      // 3. セッションが存在しない場合は、新規セッションを作成してメインチャットに開く
+      let newSessionId = null;
+      if (typeof host?.requestProfile === 'function') {
+        const createRes = await host.requestProfile(targetBot, 'session.create', {}).catch(() => null);
+        newSessionId = createRes?.stored_session_id || createRes?.session?.id || createRes?.id || createRes?.session_id;
+      } else if (typeof host?.request === 'function') {
+        const createRes = await host.request('session.create', { profile: targetBot }).catch(() => null);
+        newSessionId = createRes?.stored_session_id || createRes?.session?.id || createRes?.id || createRes?.session_id;
+      }
+
+      if (newSessionId) {
+        if (typeof host?.openSession === 'function') {
+          try {
+            await host.openSession(newSessionId, {
+              profile: targetBot,
+              intent: 'main',
+              awaitHydration: true,
+              keepAllProfilesScope: false
+            });
+            return;
+          } catch (e) {}
+        }
+        if (typeof window !== 'undefined') {
+          window.location.hash = `#/${newSessionId}`;
+        }
+        if (typeof host?.navigate === 'function') {
+          host.navigate(`/${newSessionId}`);
+        }
+      } else {
+        if (typeof host?.ensureAgent === 'function') {
+          await host.ensureAgent(null, targetBot).catch(() => {});
+        }
+        if (typeof window !== 'undefined') {
+          window.location.hash = '#/';
+        }
+        if (typeof host?.navigate === 'function') {
+          host.navigate('/');
+        }
+      }
+    } catch (err) {
+      console.error('[AgentMonitor] handleAgentClick error:', err);
+    }
+  };
+
   const filteredActivities = activities.filter((act) => {
     if (filter === 'all') return true;
     if (filter === 'busy') {
@@ -599,17 +723,28 @@ function AgentActivityPane() {
               const colors = ['#6366f1', '#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'];
               const avatarBg = colors[index % colors.length];
 
+              const isHovered = hoveredBot === botName;
+
               return jsxs('div', {
                 key: botName,
+                onClick: () => handleAgentClick(botName),
+                onMouseEnter: () => setHoveredBot(botName),
+                onMouseLeave: () => setHoveredBot(null),
+                title: `${displayName} のチャットを開く`,
                 style: {
                   display: 'flex',
                   alignItems: 'center',
                   gap: '10px',
                   padding: '7px 10px',
                   borderRadius: '8px',
-                  background: isFocused ? 'rgba(0, 0, 0, 0.05)' : 'transparent',
+                  background: isFocused
+                    ? 'rgba(0, 0, 0, 0.08)'
+                    : isHovered
+                    ? 'rgba(0, 0, 0, 0.04)'
+                    : 'transparent',
                   cursor: 'pointer',
-                  transition: 'background 0.15s ease'
+                  transition: 'background 0.15s ease, transform 0.1s ease',
+                  userSelect: 'none'
                 },
                 children: [
                   // 本家風丸型アバター（画像 or イニシャル）
