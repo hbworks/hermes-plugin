@@ -631,17 +631,18 @@ function AgentActivityPane() {
         ]
       }),
 
-      // 2. エージェント一覧（重複ゼロ・固定ロスター）
+      // 2. エージェント一覧（2カラムグリッド配置）
       jsxs('div', {
         style: {
-          display: 'flex',
-          flexDirection: 'column',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
           padding: '4px 8px',
-          gap: '2px'
+          gap: '4px 6px'
         },
         children: roster.length === 0
           ? jsx('div', {
               style: {
+                gridColumn: '1 / -1',
                 padding: '12px 8px',
                 textAlign: 'left',
                 color: '#8e8e93',
@@ -683,7 +684,7 @@ function AgentActivityPane() {
               const avatarChar = displayName.slice(0, 1).toUpperCase();
 
               // 指示元バッジ
-              const originTag = bState.isTeam ? '👥 Team Chat' : '👤 Direct';
+              const originTag = bState.isTeam ? '👥 Team' : '👤 Direct';
               const originColor = bState.isTeam ? '#8b5cf6' : '#10b981';
 
               // ステータスに応じた色・ラベル・アイコン（推論中 / ツール呼出 / ツール実行中 / ツール完了 / 出力中）
@@ -701,17 +702,17 @@ function AgentActivityPane() {
                 statusColor = '#f59e0b'; // オレンジ
                 pulseColor = '#f59e0b';
                 statusIcon = '🚀';
-                statusLabel = `🚀 ツール呼出: ${toolName || 'tool'}`;
+                statusLabel = `🚀 呼出: ${toolName || 'tool'}`;
               } else if (statusType === 'tool') {
                 statusColor = '#8b5cf6'; // 紫
                 pulseColor = '#8b5cf6';
                 statusIcon = '⚡';
-                statusLabel = `⚡ ツール実行中: ${toolName || 'tool'} (${elapsed}s)`;
+                statusLabel = `⚡ 実行中: ${toolName || 'tool'} (${elapsed}s)`;
               } else if (statusType === 'tool_completed') {
                 statusColor = '#10b981'; // 緑
                 pulseColor = '#10b981';
                 statusIcon = '✅';
-                statusLabel = `✅ ツール完了: ${toolName || 'tool'} (${timerInfo?.duration || elapsed}s)`;
+                statusLabel = `✅ 完了: ${toolName || 'tool'} (${timerInfo?.duration || elapsed}s)`;
               } else if (statusType === 'generating') {
                 statusColor = '#3b82f6'; // 青
                 pulseColor = '#3b82f6';
@@ -730,190 +731,186 @@ function AgentActivityPane() {
                 onClick: () => handleAgentClick(botName),
                 onMouseEnter: () => setHoveredBot(botName),
                 onMouseLeave: () => setHoveredBot(null),
-                title: `${displayName} のチャットを開く`,
+                title: `${displayName} (${providerName ? providerName + '/' : ''}${modelName || 'default'}) - クリックしてチャットを開く`,
                 style: {
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                  padding: '7px 10px',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  padding: '7px 8px',
                   borderRadius: '8px',
                   background: isFocused
                     ? 'rgba(0, 0, 0, 0.08)'
                     : isHovered
                     ? 'rgba(0, 0, 0, 0.04)'
-                    : 'transparent',
+                    : 'rgba(0, 0, 0, 0.02)',
+                  border: isFocused
+                    ? '1px solid rgba(0, 0, 0, 0.15)'
+                    : '1px solid rgba(0, 0, 0, 0.05)',
                   cursor: 'pointer',
-                  transition: 'background 0.15s ease, transform 0.1s ease',
-                  userSelect: 'none'
+                  transition: 'background 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
+                  userSelect: 'none',
+                  minWidth: 0,
+                  overflow: 'hidden'
                 },
                 children: [
-                  // 本家風丸型アバター（画像 or イニシャル）
+                  // 1行目: アバター + ピン留め + タイマー/idle
                   jsxs('div', {
                     style: {
-                      position: 'relative',
-                      width: '32px',
-                      height: '32px',
-                      minWidth: '32px',
-                      borderRadius: '50%',
-                      background: isBusy ? pulseColor : avatarBg,
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#ffffff',
-                      fontWeight: '600',
-                      fontSize: '12px',
-                      boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                      overflow: 'visible',
-                      transition: 'background-color 0.2s ease'
+                      justifyContent: 'space-between',
+                      gap: '5px'
                     },
                     children: [
-                      avatarImg
-                        ? jsx('img', {
-                            src: avatarImg,
-                            alt: displayName,
-                            style: {
-                              width: '100%',
-                              height: '100%',
-                              borderRadius: '50%',
-                              objectFit: 'cover'
-                            }
-                          })
-                        : jsx('span', { children: isBusy ? (statusIcon || '⚡') : avatarChar }),
-                      // 稼働中インジケータ（状態別カラー）
-                      jsx('span', {
-                        style: {
-                          position: 'absolute',
-                          bottom: '-1px',
-                          right: '-1px',
-                          width: '9px',
-                          height: '9px',
-                          borderRadius: '50%',
-                          backgroundColor: isBusy ? pulseColor : '#c7c7cc',
-                          border: '2px solid #ffffff',
-                          boxShadow: isBusy ? `0 0 6px ${pulseColor}` : 'none',
-                          zIndex: 2,
-                          transition: 'background-color 0.2s ease, box-shadow 0.2s ease'
-                        }
-                      })
-                    ]
-                  }),
-
-                  // テキスト情報
-                  jsxs('div', {
-                    style: {
-                      display: 'flex',
-                      flexDirection: 'column',
-                      flex: 1,
-                      overflow: 'hidden',
-                      gap: '2px'
-                    },
-                    children: [
-                      jsxs('div', {
-                        style: {
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center'
-                        },
-                        children: [
-                          jsxs('div', {
-                            style: { display: 'flex', alignItems: 'center', gap: '6px' },
-                            children: [
-                              jsxs('span', {
-                                style: {
-                                  fontWeight: isFocused ? '600' : '500',
-                                  fontSize: '12px',
-                                  color: '#1c1c1e',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                },
-                                children: [
-                                  isFocused && jsx('span', { style: { fontSize: '10px' }, children: '📌' }),
-                                  displayName
-                                ]
-                              }),
-                              jsx('span', {
-                                style: {
-                                  fontSize: '9px',
-                                  fontWeight: '600',
-                                  padding: '1px 5px',
-                                  borderRadius: '4px',
-                                  backgroundColor: `rgba(0, 0, 0, 0.04)`,
-                                  color: originColor,
-                                  letterSpacing: '0.02em'
-                                },
-                                children: originTag
-                              })
-                            ]
-                          }),
-                          jsx('span', {
-                            style: {
-                              fontSize: '10px',
-                              color: isBusy ? statusColor : '#8e8e93',
-                              fontWeight: isBusy ? '600' : '400'
-                            },
-                            children: isBusy ? `${elapsed}s` : 'idle'
-                          })
-                        ]
-                      }),
                       jsxs('div', {
                         style: {
                           display: 'flex',
                           alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '6px',
-                          marginTop: '1px'
+                          gap: '4px'
                         },
                         children: [
-                          jsx('span', {
-                            style: {
-                              fontSize: '11px',
-                              color: isBusy ? statusColor : '#8e8e93',
-                              fontWeight: isBusy ? '500' : '400',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              flex: 1
-                            },
-                            children: statusLabel
-                          }),
+                          // 丸型アバター（24px）
                           jsxs('div', {
                             style: {
+                              position: 'relative',
+                              width: '24px',
+                              height: '24px',
+                              minWidth: '24px',
+                              borderRadius: '50%',
+                              background: isBusy ? pulseColor : avatarBg,
                               display: 'flex',
                               alignItems: 'center',
-                              gap: '4px',
+                              justifyContent: 'center',
+                              color: '#ffffff',
+                              fontWeight: '600',
+                              fontSize: '10px',
+                              boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                              overflow: 'visible',
                               flexShrink: 0
                             },
                             children: [
-                              providerName && jsx('span', {
+                              avatarImg
+                                ? jsx('img', {
+                                    src: avatarImg,
+                                    alt: displayName,
+                                    style: {
+                                      width: '100%',
+                                      height: '100%',
+                                      borderRadius: '50%',
+                                      objectFit: 'cover'
+                                    }
+                                  })
+                                : jsx('span', { children: isBusy ? (statusIcon || '⚡') : avatarChar }),
+                              // 稼働中インジケータ
+                              jsx('span', {
                                 style: {
-                                  fontSize: '9px',
-                                  fontWeight: '500',
-                                  padding: '1px 5px',
-                                  borderRadius: '3px',
-                                  background: 'rgba(0, 0, 0, 0.05)',
-                                  color: '#6e6e73',
-                                  fontFamily: 'ui-monospace, monospace',
-                                  letterSpacing: '0.02em'
-                                },
-                                children: providerName
-                              }),
-                              modelName && jsx('span', {
-                                style: {
-                                  fontSize: '9px',
-                                  fontWeight: '600',
-                                  padding: '1px 5px',
-                                  borderRadius: '3px',
-                                  background: 'rgba(99, 102, 241, 0.08)',
-                                  color: '#6366f1',
-                                  fontFamily: 'ui-monospace, monospace',
-                                  letterSpacing: '0.02em'
-                                },
-                                children: modelName
+                                  position: 'absolute',
+                                  bottom: '-1px',
+                                  right: '-1px',
+                                  width: '7px',
+                                  height: '7px',
+                                  borderRadius: '50%',
+                                  backgroundColor: isBusy ? pulseColor : '#c7c7cc',
+                                  border: '1.5px solid #ffffff',
+                                  boxShadow: isBusy ? `0 0 5px ${pulseColor}` : 'none',
+                                  zIndex: 2
+                                }
                               })
                             ]
-                          })
+                          }),
+                          // フォーカス時のピン留めアイコン
+                          isFocused && jsx('span', { style: { fontSize: '10px', flexShrink: 0 }, children: '📌' })
                         ]
+                      }),
+                      // タイマー / idle
+                      jsx('span', {
+                        style: {
+                          fontSize: '9px',
+                          color: isBusy ? statusColor : '#8e8e93',
+                          fontWeight: isBusy ? '600' : '400',
+                          padding: isBusy ? '1px 4px' : '0',
+                          borderRadius: '3px',
+                          backgroundColor: isBusy ? 'rgba(0, 0, 0, 0.05)' : 'transparent',
+                          flexShrink: 0
+                        },
+                        children: isBusy ? `${elapsed}s` : 'idle'
+                      })
+                    ]
+                  }),
+
+                  // 2行目: ステータス詳細（推論中/ツール呼出/実行中/完了/出力中）
+                  jsx('div', {
+                    style: {
+                      fontSize: '10px',
+                      color: isBusy ? statusColor : '#8e8e93',
+                      fontWeight: isBusy ? '500' : '400',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      lineHeight: '1.3'
+                    },
+                    children: statusLabel
+                  }),
+
+                  // 3行目: プロバイダー名 & モデル名 & 指示元バッジ
+                  jsxs('div', {
+                    style: {
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '3px',
+                      flexWrap: 'wrap',
+                      marginTop: '1px'
+                    },
+                    children: [
+                      // providerName
+                      providerName && jsx('span', {
+                        style: {
+                          fontSize: '8.5px',
+                          fontWeight: '500',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          background: 'rgba(0, 0, 0, 0.05)',
+                          color: '#5c5c60',
+                          fontFamily: 'ui-monospace, monospace',
+                          letterSpacing: '0.01em',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '100%'
+                        },
+                        children: providerName
+                      }),
+                      // modelName
+                      modelName && jsx('span', {
+                        style: {
+                          fontSize: '8.5px',
+                          fontWeight: '600',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          background: 'rgba(99, 102, 241, 0.08)',
+                          color: '#6366f1',
+                          fontFamily: 'ui-monospace, monospace',
+                          letterSpacing: '0.01em',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '100%'
+                        },
+                        children: modelName
+                      }),
+                      // originTag (Team / Direct)
+                      jsx('span', {
+                        style: {
+                          fontSize: '8.5px',
+                          fontWeight: '500',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          backgroundColor: 'rgba(0, 0, 0, 0.03)',
+                          color: originColor,
+                          letterSpacing: '0.01em',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: originTag
                       })
                     ]
                   })
