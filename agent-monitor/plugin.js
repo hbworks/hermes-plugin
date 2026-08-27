@@ -689,7 +689,7 @@ function AgentActivityPane() {
 
               // ステータスに応じた色・ラベル・アイコン（推論中 / ツール呼出 / ツール実行中 / ツール完了 / 出力中）
               let statusColor = '#8e8e93';
-              let statusLabel = bState.isTeam ? 'Team Room' : 'Direct Chat';
+              let statusLabel = '';
               let statusIcon = '';
               let pulseColor = '#c7c7cc';
 
@@ -753,7 +753,7 @@ function AgentActivityPane() {
                   overflow: 'hidden'
                 },
                 children: [
-                  // 1行目: アバター + ピン留め + タイマー/idle
+                  // 1行目: アバター + 指示元バッジ（Team / Direct） + ピン留め + タイマー/idle
                   jsxs('div', {
                     style: {
                       display: 'flex',
@@ -766,7 +766,7 @@ function AgentActivityPane() {
                         style: {
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '4px'
+                          gap: '5px'
                         },
                         children: [
                           // 丸型アバター（24px）
@@ -818,6 +818,20 @@ function AgentActivityPane() {
                               })
                             ]
                           }),
+                          // 指示元バッジ (Team / Direct)
+                          jsx('span', {
+                            style: {
+                              fontSize: '9px',
+                              fontWeight: '600',
+                              padding: '1px 5px',
+                              borderRadius: '4px',
+                              backgroundColor: bState.isTeam ? 'rgba(139, 92, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                              color: originColor,
+                              letterSpacing: '0.01em',
+                              whiteSpace: 'nowrap'
+                            },
+                            children: originTag
+                          }),
                           // フォーカス時のピン留めアイコン
                           isFocused && jsx('span', { style: { fontSize: '10px', flexShrink: 0 }, children: '📌' })
                         ]
@@ -839,20 +853,22 @@ function AgentActivityPane() {
                   }),
 
                   // 2行目: ステータス詳細（推論中/ツール呼出/実行中/完了/出力中）
-                  jsx('div', {
-                    style: {
-                      fontSize: '10px',
-                      color: isBusy ? statusColor : '#8e8e93',
-                      fontWeight: isBusy ? '500' : '400',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      lineHeight: '1.3'
-                    },
-                    children: statusLabel
-                  }),
+                  statusLabel
+                    ? jsx('div', {
+                        style: {
+                          fontSize: '10px',
+                          color: statusColor,
+                          fontWeight: '500',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          lineHeight: '1.3'
+                        },
+                        children: statusLabel
+                      })
+                    : null,
 
-                  // 3行目: プロバイダー名 & モデル名 & 指示元バッジ
+                  // 3行目: プロバイダー名 & モデル名
                   jsxs('div', {
                     style: {
                       display: 'flex',
@@ -897,20 +913,6 @@ function AgentActivityPane() {
                           maxWidth: '100%'
                         },
                         children: modelName
-                      }),
-                      // originTag (Team / Direct)
-                      jsx('span', {
-                        style: {
-                          fontSize: '8.5px',
-                          fontWeight: '500',
-                          padding: '1px 4px',
-                          borderRadius: '3px',
-                          backgroundColor: 'rgba(0, 0, 0, 0.03)',
-                          color: originColor,
-                          letterSpacing: '0.01em',
-                          whiteSpace: 'nowrap'
-                        },
-                        children: originTag
                       })
                     ]
                   })
