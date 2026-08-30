@@ -2,7 +2,6 @@ import os
 import json
 import datetime
 import re
-import textwrap
 from hermes_tools import (
     memory,
     skill_view,
@@ -18,6 +17,7 @@ PLUGIN_NAME = "wiki_skill_evolution"
 DEFAULT_SKILL_NAME = "default_skill"
 
 # Simple golden set tasks for gating (shell commands to verify skill environment)
+# NOTE: 現在の Gating はシェルの基本動作およびスキル構文（## 実行手順）の健全性を担保する設計
 GOLDEN_TASKS = [
     {"goal": "echo hello", "context": ""},
     {"goal": "pwd", "context": ""},
@@ -27,30 +27,43 @@ def _now_str():
     return datetime.datetime.now().isoformat(timespec='seconds')
 
 def _count_recent_errors(hours: int = 6) -> int:
-    """直近 N 時間以内にエラー系ログが何件あるかを session_search で取得。
-    時間フィルタは実装していないが、hours に基づいて取得件数を制限することで
-    概ね最近のエラー数を見積もる。"""
+    """直近 N 時間以内に発生したエラー系ログ件数を session_search で取得・時刻フィルタしてカウント。"""
+    cutoff = datetime.datetime.now() - datetime.timedelta(hours=hours)
+    cutoff_iso = cutoff.isoformat(timespec='seconds')
     query = "error OR fail OR exception OR panic"
-    limit = min(200, hours * 10 + 20)
-    res = session_search(query=query, limit=limit)
-    matches = res.get("matches", [])
-    return len(matches)
+    res = session_search(query=query, limit=200)
+    matches = res.get("matches", []) if isinstance(res, dict) else []
+    count = 0
+    for m in matches:
+        if not m or not isinstance(m, str):
+            continue
+        parts = m.split("|", 1)
+        if len(parts) >= 1 and parts[0].strip():
+            ts_str = parts[0].strip()
+            try:
+                if ts_str >= cutoff_iso:
+                    count += 1
+            except Exception:
+                count += 1
+        else:
+            count += 1
+    return count
 
 def _get_latest_error() -> str | None:
     """最新のエラーログ文字列を取得（見つからなければ None）"""
     query = "error OR fail OR exception"
     res = session_search(query=query, limit=1, around_message_id=None)
-    matches = res.get("matches", [])
+    matches = res.get("matches", []) if isinstance(res, dict) else []
     if not matches:
         return None
     latest = matches[0]
-    if "|" in latest:
+    if isinstance(latest, str) and "|" in latest:
         _, content = latest.split("|", 1)
         return content.strip()
-    return latest.strip()
+    return str(latest).strip() if latest else None
 
 def _extract_lesson_from_error(error_text: str) -> str | None:
-    """エラーテキストから簡易な教訓文を生成（実際はもっと洗練させても良い）"""
+    """エラーテキストから簡易な教訓文を生成（ルールベース）"""
     err_lower = error_text.lower()
     if "importerror" in err_lower or "module not found" in err_lower:
         return (
@@ -99,9 +112,8 @@ def _upsert_wiki_entry(lesson: str):
     if not first_token.startswith("[") or not first_token.endswith("]"):
         memory.add(target='memory', content=tagged)
         return
-    hint = first_token.strip("[]")
     recent = sqlite_list_memories(category='memory', limit=100)
-    similar_items = recent.get("memories", [])
+    similar_items = recent.get("memories", []) if isinstance(recent, dict) else []
     best_item = None
     best_ratio = 0.0
     for item in similar_items:
@@ -121,7 +133,9 @@ def _upsert_wiki_entry(lesson: str):
         memory.add(target='memory', content=tagged)
 
 def _propose_skill_patch(skill_name: str) -> bool:
-    """ナレッジを元にスキルのセクションを簡易ルールで改定する（delegate_task 不使用）"""
+    """ナレッジを元にスキルのセクションをルールベースで安全に改定する"""
+    if not skill_name or not isinstance(skill_name, str):
+        return False
     skill_info = skill_view(name=skill_name)
     if not skill_info or "content" not in skill_info:
         memory.add(
@@ -139,10 +153,9 @@ def _propose_skill_patch(skill_name: str) -> bool:
         )
         return False
     old_block = match.group(0)
-    old_lines = old_block.splitlines()
 
     wiki_raw = sqlite_list_memories(category='memory', limit=200)
-    wiki_entries = wiki_raw.get("memories", [])
+    wiki_entries = wiki_raw.get("memories", []) if isinstance(wiki_raw, dict) else []
     lessons = [entry.get("content", "") for entry in wiki_entries if entry.get("content")]
 
     additions = []
@@ -173,15 +186,22 @@ def _propose_skill_patch(skill_name: str) -> bool:
 
     unique_additions = []
     for line in additions:
-        if line not in unique_additions:
+        if line not in unique_additions and line not in old_block:
             unique_additions.append(line)
 
-    new_block = "\n".join(old_lines) + "\n" + "\n".join(unique_additions)
+    if not unique_additions:
+        memory.add(target='memory', content=f'[{PLUGIN_NAME}] 既存の実行手順に既に含まれているためパッチ不要')
+        return False
 
-    if abs(len(new_block.splitlines()) - len(old_lines)) > 30:
+    # 末尾 \n を保証して安全に結合
+    new_block = old_block.rstrip("\n") + "\n" + "\n".join(unique_additions)
+
+    old_line_count = len(old_block.splitlines())
+    new_line_count = len(new_block.splitlines())
+    if abs(new_line_count - old_line_count) > 30:
         memory.add(
             target='memory',
-            content=f'[{PLUGIN_NAME}] スキル変更が大きすぎる（{len(old_lines)}→{len(new_block.splitlines())}行）。人間レビューが必要。'
+            content=f'[{PLUGIN_NAME}] スキル変更が大きすぎる（{old_line_count}→{new_line_count}行）。人間レビューが必要。'
         )
         return False
 
@@ -195,7 +215,7 @@ def _propose_skill_patch(skill_name: str) -> bool:
     return True
 
 def _run_gating(skill_name: str) -> dict:
-    """改善後のスキルでゴールデンセットを terminal で実行し、全て成功すればパスとする（delegate_task 不使用）"""
+    """改善後のスキルでゴールデンセットを terminal で実行し、環境および構文健全性を確認"""
     all_passed = True
     for task in GOLDEN_TASKS:
         goal = task["goal"]
@@ -217,8 +237,9 @@ def _run_gating(skill_name: str) -> dict:
     }
 
 def _commit_skill(skill_name: str):
-    """スキルディレクトリで git add/commit/tag を実行"""
-    skill_info = skill_view(name=skill_name)
+    """スキルディレクトリで git add/commit/tag を実行（workdir 指定のため cd 不要）"""
+    if not skill_name or not skill_name.strip():
+        return
     profile = os.environ.get("HERMES_PROFILE", "buddy")
     base_dir = os.path.expanduser(f"~/.hermes/profiles/{profile}/skills")
     skill_dir = os.path.join(base_dir, skill_name)
@@ -228,18 +249,20 @@ def _commit_skill(skill_name: str):
             content=f'[{PLUGIN_NAME}] スキルディレクトリが見つからない: {skill_dir}'
         )
         return
-    terminal(command=f"cd {skill_dir} && git add SKILL.md", workdir=skill_dir)
-    terminal(command=f"cd {skill_dir} && git commit -m 'WikiSkill 自律更新: {_now_str()}'", workdir=skill_dir)
-    terminal(command=f"cd {skill_dir} && git tag -a v{datetime.datetime.now():%Y%m%d-%H%M%S} -m 'WikiSkill 自律更新'", workdir=skill_dir)
+    terminal(command="git add SKILL.md", workdir=skill_dir)
+    terminal(command=f"git commit -m 'WikiSkill 自律更新: {_now_str()}'", workdir=skill_dir)
+    terminal(command=f"git tag -a v{datetime.datetime.now():%Y%m%d-%H%M%S} -m 'WikiSkill 自律更新'", workdir=skill_dir)
 
 def _rollback_skill(skill_name: str):
     """スキルを HEAD（直前コミット）に戻す（Wiki は触らない）"""
+    if not skill_name or not skill_name.strip():
+        return
     profile = os.environ.get("HERMES_PROFILE", "buddy")
     base_dir = os.path.expanduser(f"~/.hermes/profiles/{profile}/skills")
     skill_dir = os.path.join(base_dir, skill_name)
     if not os.path.isdir(skill_dir):
         return
-    terminal(command=f"cd {skill_dir} && git checkout HEAD -- SKILL.md", workdir=skill_dir)
+    terminal(command="git checkout HEAD -- SKILL.md", workdir=skill_dir)
 
 def _record_metrics(plugin_name: str, passed: bool):
     """成功/失敗を簡易メトリクスとして sqlite_remember に記録"""
@@ -258,6 +281,13 @@ class Plugin:
         pass
 
     def on_cron(self, **kwargs):
+        if not DEFAULT_SKILL_NAME or not isinstance(DEFAULT_SKILL_NAME, str):
+            memory.add(
+                target='memory',
+                content=f'[{PLUGIN_NAME}] 無効な DEFAULT_SKILL_NAME 設定 → 終了'
+            )
+            return
+
         recent_err_cnt = _count_recent_errors(hours=6)
         if recent_err_cnt == 0:
             memory.add(
