@@ -1,5 +1,5 @@
 name: wiki_skill_evolution
-version: "0.1.0"
+version: "0.1.1"
 description: >
   WikiSkill 自律進化ループ（Raw → Wiki → Skill）をプラグインとして実装。
   ガード条件・ナレッジ品質管理・スキル品質管理・Gating/Rollback・監視を含む。
@@ -8,3 +8,4 @@ entrypoint: main:Plugin
 hooks:
   - agent_start
   - cron
+cron_schedule: "0 */6 * * *"
