@@ -101,12 +101,19 @@ function MemoryManagementPage() {
   const [formCategory, setFormCategory] = useState('preference')
   const [saving, setSaving] = useState(false)
 
+  const [dbPath, setDbPath] = useState('')
+
   // Load stats
   const loadStats = useCallback(async () => {
     try {
       const data = await api('/stats')
-      if (data && data.categories) {
-        setCategories(data.categories)
+      if (data) {
+        if (data.categories) {
+          setCategories(data.categories)
+        }
+        if (data.db_path) {
+          setDbPath(data.db_path)
+        }
       }
     } catch (e) {
       console.warn('Failed to load stats', e)
@@ -410,7 +417,8 @@ function MemoryManagementPage() {
               jsx('span', { children: 'Storage:' }),
               jsx('span', {
                 style: { fontWeight: 500, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                children: 'SQLite (~/.hermes/memory.db)'
+                title: dbPath || 'SQLite (~/.hermes/memory.db)',
+                children: dbPath ? `SQLite (${dbPath})` : 'SQLite (~/.hermes/memory.db)'
               })
             ]
           }),
