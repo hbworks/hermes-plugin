@@ -9,6 +9,7 @@ import {
   cn,
   Codicon,
   host,
+  useValue,
   ROUTES_AREA,
   SIDEBAR_NAV_AREA,
   Tip
@@ -23,7 +24,14 @@ async function api(path, options = {}) {
   if (_rest) {
     try {
       const cleanPath = path.startsWith('/') ? path.slice(1) : path
-      return await _rest(cleanPath, options)
+      const [route, queryStr] = cleanPath.split('?')
+      const params = {}
+      if (queryStr) {
+        new URLSearchParams(queryStr).forEach((val, key) => {
+          params[key] = val
+        })
+      }
+      return await _rest(cleanPath, { ...options, params: { ...(options.params || {}), ...params } })
     } catch (e) {
       console.warn('ctx.rest call error, falling back to fetch:', e)
     }
@@ -59,6 +67,56 @@ function MemoryManagementPage() {
   const containerRef = useRef(null)
   const [containerWidth, setContainerWidth] = useState(800)
 
+  // 0. アクティブなプロファイル（bot）のリアルタイム監視
+  const focusedProfileAtom = host?.state?.focusedSessionProfile || host?.state?.profile
+  const focusedProfileRaw = (typeof useValue === 'function' && focusedProfileAtom) ? useValue(focusedProfileAtom) : null
+  const hostProfileName = useMemo(() => {
+    if (!focusedProfileRaw) return 'default'
+    if (typeof focusedProfileRaw === 'string') return focusedProfileRaw
+    if (typeof focusedProfileRaw === 'object') {
+      return focusedProfileRaw.name || focusedProfileRaw.id || focusedProfileRaw.profile || 'default'
+    }
+    return 'default'
+  }, [focusedProfileRaw])
+
+  const [selectedProfile, setSelectedProfile] = useState(hostProfileName || 'default')
+  const [availableProfiles, setAvailableProfiles] = useState(['default', 'assistant', 'research', 'coding', 'buddy', 'copywriter'])
+  const prevHostProfileRef = useRef(hostProfileName)
+
+  const [items, setItems] = useState([])
+  const [total, setTotal] = useState(0)
+  const [query, setQuery] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('all')
+  const [categories, setCategories] = useState({})
+  const [selectedId, setSelectedId] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
+
+  // Edit / Add modal state
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [editingItem, setEditingItem] = useState(null)
+  const [formContent, setFormContent] = useState('')
+  const [formCategory, setFormCategory] = useState('preference')
+  const [saving, setSaving] = useState(false)
+  const [dbPath, setDbPath] = useState('')
+
+  // 画面幅が極端に狭い場合の判定（< 520px）
+  const isCompact = containerWidth < 520
+
+  // Hermes のボットが実際に切り替わった時だけ selectedProfile を追従
+  useEffect(() => {
+    if (hostProfileName && hostProfileName !== prevHostProfileRef.current) {
+      prevHostProfileRef.current = hostProfileName
+      setSelectedProfile(hostProfileName)
+    }
+  }, [hostProfileName])
+
+  // プロファイル切り替え時に選択をリセット
+  useEffect(() => {
+    setSelectedId(null)
+  }, [selectedProfile])
+
   useEffect(() => {
     if (!containerRef.current) return
     const update = () => {
@@ -81,32 +139,13 @@ function MemoryManagementPage() {
     }
   }, [])
 
-  // 画面幅が極端に狭い場合の判定（< 520px）
-  const isCompact = containerWidth < 520
-
-  const [items, setItems] = useState([])
-  const [total, setTotal] = useState(0)
-  const [query, setQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('all')
-  const [categories, setCategories] = useState({})
-  const [selectedId, setSelectedId] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
-
-  // Edit / Add modal state
-  const [showAddModal, setShowAddModal] = useState(false)
-  const [editingItem, setEditingItem] = useState(null)
-  const [formContent, setFormContent] = useState('')
-  const [formCategory, setFormCategory] = useState('preference')
-  const [saving, setSaving] = useState(false)
-
-  const [dbPath, setDbPath] = useState('')
-
   // Load stats
   const loadStats = useCallback(async () => {
     try {
-      const data = await api('/stats')
+      const params = new URLSearchParams()
+      params.set('profile', selectedProfile || 'default')
+      const url = `/stats?${params.toString()}`
+      const data = await api(url)
       if (data) {
         if (data.categories) {
           setCategories(data.categories)
@@ -114,11 +153,14 @@ function MemoryManagementPage() {
         if (data.db_path) {
           setDbPath(data.db_path)
         }
+        if (Array.isArray(data.available_profiles) && data.available_profiles.length > 0) {
+          setAvailableProfiles(data.available_profiles)
+        }
       }
     } catch (e) {
       console.warn('Failed to load stats', e)
     }
-  }, [])
+  }, [selectedProfile])
 
   // Load memories list
   const loadMemories = useCallback(async () => {
@@ -128,6 +170,7 @@ function MemoryManagementPage() {
       const params = new URLSearchParams()
       if (query.trim()) params.set('query', query.trim())
       if (selectedCategory !== 'all') params.set('category', selectedCategory)
+      params.set('profile', selectedProfile || 'default')
       params.set('limit', '100')
 
       const data = await api(`/memories?${params.toString()}`)
@@ -146,7 +189,7 @@ function MemoryManagementPage() {
     } finally {
       setLoading(false)
     }
-  }, [query, selectedCategory])
+  }, [query, selectedCategory, selectedProfile])
 
   useEffect(() => {
     loadStats()
@@ -166,13 +209,14 @@ function MemoryManagementPage() {
     if (!formContent.trim()) return
     setSaving(true)
     try {
+      const profileParam = `?profile=${encodeURIComponent(selectedProfile || 'default')}`
       if (editingItem) {
-        await api(`/memories/${editingItem.id}`, {
+        await api(`/memories/${editingItem.id}${profileParam}`, {
           method: 'PUT',
           body: { content: formContent.trim(), category: formCategory }
         })
       } else {
-        const created = await api('/memories', {
+        const created = await api(`/memories${profileParam}`, {
           method: 'POST',
           body: { content: formContent.trim(), category: formCategory }
         })
@@ -197,7 +241,8 @@ function MemoryManagementPage() {
   const handleDelete = async (id) => {
     if (!confirm(`記憶 #${id} を削除してもよろしいですか？`)) return
     try {
-      await api(`/memories/${id}`, { method: 'DELETE' })
+      const profileParam = `?profile=${encodeURIComponent(selectedProfile || 'default')}`
+      await api(`/memories/${id}${profileParam}`, { method: 'DELETE' })
       if (isCompact) setMobileDetailOpen(false)
       loadStats()
       loadMemories()
@@ -412,11 +457,31 @@ function MemoryManagementPage() {
         },
         children: [
           jsxs('div', {
-            style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 },
+            style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
             children: [
-              jsx('span', { children: 'Storage:' }),
+              jsx('span', { style: { fontWeight: 500, color: '#374151' }, children: 'Profile:' }),
+              jsx('select', {
+                value: selectedProfile,
+                onChange: (e) => setSelectedProfile(e.target.value),
+                style: {
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  border: '1px solid #d1d5db',
+                  backgroundColor: '#ffffff',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: '#111827',
+                  cursor: 'pointer',
+                  outline: 'none'
+                },
+                children: availableProfiles.map((p) =>
+                  jsx('option', { key: p, value: p, children: p === 'default' ? 'デフォルト (~/.hermes)' : p }, p)
+                )
+              }),
+              jsx('span', { style: { color: '#d1d5db' }, children: '•' }),
+              jsx('span', { style: { color: '#6b7280' }, children: 'Storage:' }),
               jsx('span', {
-                style: { fontWeight: 500, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                style: { fontWeight: 500, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '320px' },
                 title: dbPath || 'SQLite (~/.hermes/memory.db)',
                 children: dbPath ? `SQLite (${dbPath})` : 'SQLite (~/.hermes/memory.db)'
               })
