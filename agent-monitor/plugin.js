@@ -1117,6 +1117,8 @@ function AgentActivityPane() {
 export default {
   id: 'agent-monitor',
   name: 'Agent Activity Monitor',
+  description: 'Real-time activity and thinking monitor for Hermes Agent bots.',
+  defaultEnabled: true,
   register(ctx) {
     // 1. 右ペインとして常駐登録
     ctx.register({
@@ -1143,3 +1145,4 @@ export default {
     });
   }
 };
+
