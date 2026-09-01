@@ -24,18 +24,16 @@ Hermes Desktop 向けの SQLite 永続メモリ管理用 GUI プラグインで�
 
 ## 🚀 インストール手順
 
-Hermes Desktop のプラグインディレクトリ `~/.hermes/desktop-plugins/sqlite-memory-gui/` に `plugin.js` を配置します。
+Hermes Desktop のプラグインディレクトリ `~/.hermes/desktop-plugins/sqlite_memory/` に `plugin.js` を配置します（※プラグインID `sqlite_memory` とフォルダ名を一致させる必要があります）。
 
 ### コピー用コマンド
 
 ```bash
 # プラグイン配置先へディレクトリごとコピー
-mkdir -p ~/.hermes/desktop-plugins
-cp -r ./sqlite-memory-gui ~/.hermes/desktop-plugins/
+mkdir -p ~/.hermes/desktop-plugins/sqlite_memory
+cp ./sqlite-memory-gui/plugin.js ~/.hermes/desktop-plugins/sqlite_memory/plugin.js
 
-# または個別コピー
-# mkdir -p ~/.hermes/desktop-plugins/sqlite-memory-gui
-# cp ./sqlite-memory-gui/plugin.js ~/.hermes/desktop-plugins/sqlite-memory-gui/plugin.js
+# または Unified Package として配置されている場合は自動認識されます (~/.hermes/plugins/sqlite_memory/desktop/plugin.js)
 ```
 
 > **Note:**
