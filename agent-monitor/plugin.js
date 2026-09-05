@@ -172,31 +172,24 @@ function AgentActivityPane() {
               }).catch(() => {});
           }
 
-          // セッション情報同期
-          const fetchMethod = typeof host?.requestProfile === 'function'
-            ? () => host.requestProfile(botName, 'session.list', { limit: 5, include_hidden: true })
-            : () => host.request('session.list', { profile: botName, limit: 5, include_hidden: true });
-
-          fetchMethod().then((sessRes) => {
-            const rows = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
-            if (isMounted && rows.length > 0) {
-              const latest = rows[0];
-              const isTeam = (latest?.title || '').toLowerCase().includes('group:');
-              if (!isTeam && latest?.id) {
-                sessionBotMapRef.current[latest.id] = botName;
-              }
-              setBotStates((prev) => ({
-                ...prev,
-                [botName]: {
-                  model: latest?.model || p.model || '',
-                  provider: latest?.provider || p.provider || '',
-                  lastSessionId: latest?.id,
-                  isTeam,
-                  title: latest?.title || ''
-                }
-              }));
+          // profiles.list のメタデータから直接取得（バックエンドを起動させない）
+          const cs = p.canonical_session || p.last_session;
+          const csId = cs?.resolved_id || cs?.id;
+          const title = cs?.title || '';
+          const isTeam = title.toLowerCase().includes('group:');
+          if (!isTeam && csId) {
+            sessionBotMapRef.current[csId] = botName;
+          }
+          setBotStates((prev) => ({
+            ...prev,
+            [botName]: {
+              model: p.model || cs?.model || '',
+              provider: p.provider || cs?.provider || '',
+              lastSessionId: csId,
+              isTeam,
+              title
             }
-          }).catch(() => {});
+          }));
         }
       } catch (err) {
         console.debug('[AgentMonitor] sync error:', err);
