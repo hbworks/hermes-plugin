@@ -2,148 +2,78 @@ import { host, useValue, PANES_AREA, ROUTES_AREA } from '@hermes/plugin-sdk';
 import { jsx, jsxs } from 'react/jsx-runtime';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 
-// --- ヘルパー関数 ---
+// --- 1. ホバー先行起動（Hover-intent prewarm）抑止 ---
+if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
+  window.__hermes_prewarm_blocked_v2 = true;
+  const PREWARM_SEL = '[data-slot*="profile"],[data-tour*="profile"],aside,nav,[data-slot="sidebar"],[data-sidebar],[role="menu"],[role="menuitem"],[role="menuitemradio"],[data-radix-popper-content-wrapper],[data-radix-collection-item],[data-slot="session-row"],[data-roster-key],button[aria-label*="profile" i]';
+  const block = (e) => { if (e.target?.closest?.(PREWARM_SEL)) e.stopImmediatePropagation(); };
+  ['pointerenter', 'pointerover', 'mouseenter', 'mouseover'].forEach((t) => window.addEventListener(t, block, true));
+
+  // SDKウォームアップの無効化（最大10回試行で自動終了）
+  let tries = 0;
+  const timer = setInterval(() => {
+    const sdk = window.__HERMES_PLUGIN_SDK__;
+    if (sdk?.host) {
+      sdk.host.warmProfile = sdk.host.warmAgent = () => {};
+      clearInterval(timer);
+    } else if (++tries >= 10) {
+      clearInterval(timer);
+    }
+  }, 1000);
+}
+
+// --- 2. 共通ヘルパー関数 ---
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
+
+const formatRelativeTime = (ts) => {
+  if (!ts) return '履歴なし';
+  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+  if (sec < 60) return `${sec}秒前`;
+  const min = Math.floor(sec / 60);
+  return min < 60 ? `${min}分前` : `${Math.floor(min / 60)}時間前`;
+};
 
 const extractProfile = (ev, p, roster, sMap) => {
   const direct = ev.profile || ev.agent || ev.bot || ev.speaker || ev.sender ||
                  p?.profile || p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.sender || p?.role;
-  if (direct && typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
+  if (typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
   if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
   if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
 
   const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
   if (sid && sMap[sid]) return sMap[sid];
 
-  if (roster && roster.length) {
-    const textStr = `${ev.type || ''} ${p?.text || ''} ${typeof p === 'string' ? p : ''}`.toLowerCase();
-    for (const b of roster) {
-      const bn = b.name.toLowerCase();
-      if (bn !== 'default' && (textStr.includes(`"${bn}"`) || textStr.includes(`@${bn}`) || textStr.includes(`[${bn}]`))) {
-        return bn;
-      }
-    }
+  if (roster?.length) {
+    const text = `${ev.type || ''} ${p?.text || ''} ${typeof p === 'string' ? p : ''}`.toLowerCase();
+    const found = roster.find((b) => b.name !== 'default' && (text.includes(`"${b.name.toLowerCase()}"`) || text.includes(`@${b.name.toLowerCase()}`) || text.includes(`[${b.name.toLowerCase()}]`)));
+    if (found) return found.name.toLowerCase();
   }
   return '';
 };
 
-// 相対時間のフォーマット（例: "15秒前", "2分前"）
-const formatRelativeTime = (timestamp) => {
-  if (!timestamp) return '履歴なし';
-  const sec = Math.max(1, Math.floor((Date.now() - timestamp) / 1000));
-  if (sec < 60) return `${sec}秒前`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}分前`;
-  const hours = Math.floor(min / 60);
-  return `${hours}時間前`;
+// --- 3. UI スタイル & 共通コンポーネント ---
+const S = {
+  container: { display: 'flex', flexDirection: 'column', height: '100%', width: '100%', boxSizing: 'border-box', background: 'transparent', color: 'inherit', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', fontSize: '12px', overflowY: 'auto', overflowX: 'hidden', padding: '12px' },
+  card: { background: 'rgba(0, 0, 0, 0.03)', borderRadius: '10px', border: '1px solid rgba(0, 0, 0, 0.08)', padding: '12px', marginBottom: '12px' },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' },
+  title: { fontSize: '12px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#6366f1', display: 'flex', alignItems: 'center', gap: '6px' },
+  modalBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: '20px' },
+  modal: { background: '#ffffff', color: '#1f2937', borderRadius: '12px', padding: '18px 20px', maxWidth: '420px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)', border: '1px solid rgba(0, 0, 0, 0.1)' }
 };
 
-// マウスホバーによる勝手なプロファイル先行起動（Hover-intent prewarm）を完全抑止
-if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
-  window.__hermes_prewarm_blocked_v2 = true;
+const Badge = (children, bg, color) => jsx('span', {
+  style: { fontSize: '10px', fontWeight: '600', padding: '2px 6px', borderRadius: '4px', background: bg, color },
+  children
+});
 
-  const isPrewarmElement = (el) => {
-    if (!el || typeof el.closest !== 'function') return false;
-    return Boolean(
-      // 1. プロファイルレール（横並びのボタン群）
-      el.closest('[data-slot*="profile"]') ||
-      el.closest('[data-tour*="profile"]') ||
-      // 2. サイドバー全体（セッション一覧、プロファイルアイコン、ボット一覧等）
-      el.closest('aside') ||
-      el.closest('nav') ||
-      el.closest('[data-slot="sidebar"]') ||
-      el.closest('[data-sidebar]') ||
-      // 3. ドロップダウンメニュー・ポップオーバー（プロファイル選択ドロップダウン）
-      el.closest('[role="menu"]') ||
-      el.closest('[role="menuitem"]') ||
-      el.closest('[role="menuitemradio"]') ||
-      el.closest('[data-radix-popper-content-wrapper]') ||
-      el.closest('[data-radix-collection-item]') ||
-      // 4. セッション行・エージェント行
-      el.closest('[data-slot="session-row"]') ||
-      el.closest('[data-roster-key]') ||
-      // 5. プロファイル名関連ボタン
-      el.closest('button[aria-label*="profile" i]') ||
-      el.closest('button[aria-label*="Profile" i]')
-    );
-  };
-
-  const blockPrewarm = (e) => {
-    if (isPrewarmElement(e.target)) {
-      e.stopImmediatePropagation();
-    }
-  };
-
-  // ホバー系イベントをキャプチャフェーズで完全に遮断
-  ['pointerenter', 'pointerover', 'mouseenter', 'mouseover'].forEach((type) => {
-    window.addEventListener(type, blockPrewarm, true);
-  });
-
-  // プラグインSDK経由のウォームアップも無効化
-  try {
-    const patchSdk = () => {
-      const sdk = window.__HERMES_PLUGIN_SDK__;
-      if (sdk?.host) {
-        sdk.host.warmProfile = () => {};
-        sdk.host.warmAgent = () => {};
-      }
-    };
-    patchSdk();
-    setInterval(patchSdk, 2000);
-  } catch (_) {}
-}
-
-// --- スタイル定義 ---
-const S = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100%',
-    width: '100%',
-    boxSizing: 'border-box',
-    background: 'transparent',
-    color: 'inherit',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-    fontSize: '12px',
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    padding: '12px'
-  },
-  card: {
-    background: 'rgba(0, 0, 0, 0.03)',
-    borderRadius: '10px',
-    border: '1px solid rgba(0, 0, 0, 0.08)',
-    padding: '12px',
-    marginBottom: '12px'
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: '10px'
-  },
-  title: {
-    fontSize: '12px',
-    fontWeight: '700',
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase',
-    color: '#6366f1',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px'
-  },
-  badge: (bg, color) => ({
-    fontSize: '10px',
-    fontWeight: '600',
-    padding: '2px 6px',
-    borderRadius: '4px',
-    background: bg,
-    color: color
-  }),
-  button: (variant = 'primary') => {
-    const isPrimary = variant === 'primary';
-    const isDanger = variant === 'danger';
-    return {
+const Btn = ({ onClick, children, variant = 'primary', disabled = false, style = {}, title }) => {
+  const isPrimary = variant === 'primary';
+  const isDanger = variant === 'danger';
+  return jsx('button', {
+    onClick,
+    disabled,
+    title,
+    style: {
       background: isDanger ? '#ef4444' : isPrimary ? '#4f46e5' : 'rgba(0, 0, 0, 0.06)',
       color: isPrimary || isDanger ? '#ffffff' : 'inherit',
       border: 'none',
@@ -151,73 +81,33 @@ const S = {
       padding: '5px 10px',
       fontSize: '11px',
       fontWeight: '600',
-      cursor: 'pointer',
+      cursor: disabled ? 'not-allowed' : 'pointer',
       display: 'inline-flex',
       alignItems: 'center',
       gap: '4px',
-      transition: 'opacity 0.15s ease'
-    };
-  },
-  modalBackdrop: {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    backdropFilter: 'blur(3px)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 99999,
-    padding: '20px'
-  },
-  modal: {
-    background: '#ffffff',
-    color: '#1f2937',
-    borderRadius: '12px',
-    padding: '18px 20px',
-    maxWidth: '420px',
-    width: '100%',
-    boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
-    border: '1px solid rgba(0, 0, 0, 0.1)'
-  },
-  progressTrack: {
-    width: '100%',
-    height: '6px',
-    borderRadius: '3px',
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-    overflow: 'hidden',
-    marginTop: '6px',
-    marginBottom: '8px'
-  },
-  progressBar: (pct, isFull) => ({
-    width: `${Math.min(100, Math.max(0, pct))}%`,
-    height: '100%',
-    backgroundColor: isFull ? '#ef4444' : pct > 66 ? '#f59e0b' : '#10b981',
-    transition: 'width 0.3s ease, background-color 0.3s ease'
-  })
+      opacity: disabled ? 0.6 : 1,
+      ...style
+    },
+    children
+  });
 };
 
 /**
  * Agent Active Manager メインコンポーネント
  */
 function AgentActiveManagerPane() {
-  const busyBySession = useValue(host.state.busyBySession) || {};
-  const focusedProfileAtom = host.state.focusedSessionProfile || host.state.profile;
+  const busyBySession = useValue(host.state?.busyBySession) || {};
+  const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile;
   const focusedProfileName = useValue(focusedProfileAtom) || 'default';
 
-  // プール設定・状態
   const [poolLimits, setPoolLimits] = useState({ maxBackends: 3, idleMs: 600000 });
   const [roster, setRoster] = useState([]);
   const [sessionBotMap, setSessionBotMap] = useState({});
-  const [agentStatus, setAgentStatus] = useState({}); // { [botName]: { status, toolName, start, lastActive } }
-  const [lastInferenceMap, setLastInferenceMap] = useState({}); // { [botName]: { completedAt, duration, summary } }
-  const [runningProfiles, setRunningProfiles] = useState(new Set()); // 過去4分以内にアクティブなプロファイル
+  const [agentStatus, setAgentStatus] = useState({});
+  const [lastInferenceMap, setLastInferenceMap] = useState({});
+  const [runningProfiles, setRunningProfiles] = useState(new Set());
   const [isSwitching, setIsSwitching] = useState(false);
   const [switchFeedback, setSwitchFeedback] = useState(null);
-
-  // 全枠ビジー時の安全確認モーダル
   const [pendingSwitchTarget, setPendingSwitchTarget] = useState(null);
 
   const rosterRef = useRef([]);
@@ -225,15 +115,11 @@ function AgentActiveManagerPane() {
   const agentStatusRef = useRef({});
   const lastActiveRef = useRef({});
 
-  // 1. プール制限設定の読み込み
+  // プール制限設定の読み込み
   const fetchPoolLimits = async () => {
     try {
-      if (typeof window !== 'undefined' && window.hermesDesktop?.getPoolLimits) {
-        const limits = await window.hermesDesktop.getPoolLimits();
-        if (limits && typeof limits.maxBackends === 'number') {
-          setPoolLimits(limits);
-        }
-      }
+      const limits = await window.hermesDesktop?.getPoolLimits?.();
+      if (typeof limits?.maxBackends === 'number') setPoolLimits(limits);
     } catch (err) {
       console.debug('[AgentActiveManager] getPoolLimits error:', err);
     }
@@ -245,7 +131,7 @@ function AgentActiveManagerPane() {
     return () => clearInterval(interval);
   }, []);
 
-  // 2. プロファイル一覧とセッション情報の同期
+  // プロファイル一覧とセッション情報の同期
   useEffect(() => {
     let isMounted = true;
     const syncRoster = async () => {
@@ -265,15 +151,11 @@ function AgentActiveManagerPane() {
         setRoster(sorted);
         rosterRef.current = sorted;
 
-        // セッションマップ更新（バックエンドは起動させず profiles.list の情報のみ使用）
         const mapUpdate = {};
         for (const p of sorted) {
-          const botName = p.name;
           const cs = p.canonical_session || p.last_session;
           const csId = cs?.resolved_id || cs?.id;
-          if (csId) {
-            mapUpdate[csId] = botName;
-          }
+          if (csId) mapUpdate[csId] = p.name;
         }
         sessionBotMapRef.current = { ...sessionBotMapRef.current, ...mapUpdate };
         setSessionBotMap((prev) => ({ ...prev, ...mapUpdate }));
@@ -287,93 +169,63 @@ function AgentActiveManagerPane() {
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
-  // 3. Gatewayイベントの監視（推論状態と直前の推論履歴）
+  // Gatewayイベントの監視（推論状態と直前推論履歴）
   useEffect(() => {
-    let unsubscribe;
-    try {
-      if (typeof host?.onEvent === 'function') {
-        unsubscribe = host.onEvent('*', (event) => {
-          if (!event) return;
-          const eventType = (event.type || event.event || '').toLowerCase();
-          const payload = event.payload ?? event.data ?? event.message ?? event;
-          const rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
-          if (!rawProfile) return;
+    if (typeof host?.onEvent !== 'function') return;
+    const unsubscribe = host.onEvent('*', (event) => {
+      if (!event) return;
+      const eventType = (event.type || event.event || '').toLowerCase();
+      const payload = event.payload ?? event.data ?? event.message ?? event;
+      const rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
+      if (!rawProfile) return;
 
-          const now = Date.now();
-          lastActiveRef.current[rawProfile] = now;
+      const now = Date.now();
+      lastActiveRef.current[rawProfile] = now;
+      setRunningProfiles((prev) => new Set([...prev, rawProfile]));
 
-          // 稼働中セットに追加
-          setRunningProfiles((prev) => {
-            const next = new Set(prev);
-            next.add(rawProfile);
-            return next;
-          });
+      const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result);
+      const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec']) || Boolean(payload?.tool || payload?.tool_call));
+      const isThinking = !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning));
+      const isGenerating = !isToolCall && !isToolResult && !isThinking && (matchAny(eventType, ['stream', 'delta', 'message']) || Boolean(payload?.text));
+      const isFinished = matchAny(eventType, ['turn.finish', 'turn.end', 'turn.complete', 'session.idle']);
 
-          const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result);
-          const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec']) || Boolean(payload?.tool || payload?.tool_call));
-          const isThinking = !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning));
-          const isGenerating = !isToolCall && !isToolResult && !isThinking && (matchAny(eventType, ['stream', 'delta', 'message']) || Boolean(payload?.text));
-          const isFinished = matchAny(eventType, ['turn.finish', 'turn.end', 'turn.complete', 'session.idle']);
+      const toolName = (isToolCall || isToolResult) ? (payload?.tool?.name || payload?.tool || payload?.name || 'tool') : '';
 
-          const toolName = (isToolCall || isToolResult)
-            ? (payload?.tool?.name || payload?.tool || payload?.name || 'tool')
-            : '';
+      if (isFinished) {
+        const prev = agentStatusRef.current[rawProfile];
+        const duration = Math.max(1, Math.round((now - (prev?.start || (now - 2000))) / 1000));
 
-          if (isFinished) {
-            const prev = agentStatusRef.current[rawProfile];
-            const startT = prev?.start || (now - 2000);
-            const duration = Math.max(1, Math.round((now - startT) / 1000));
-
-            // 直前推論履歴に記録
-            setLastInferenceMap((prevMap) => ({
-              ...prevMap,
-              [rawProfile]: {
-                completedAt: now,
-                duration,
-                summary: prev?.toolName ? `ツール実行 (${prev.toolName})` : '思考・回答完了'
-              }
-            }));
-
-            delete agentStatusRef.current[rawProfile];
-            setAgentStatus((prev) => {
-              const updated = { ...prev };
-              delete updated[rawProfile];
-              return updated;
-            });
-          } else if (isToolResult) {
-            agentStatusRef.current[rawProfile] = {
-              status: 'tool_completed',
-              toolName: toolName || 'tool',
-              start: agentStatusRef.current[rawProfile]?.start || now,
-              lastActive: now
-            };
-            setAgentStatus({ ...agentStatusRef.current });
-          } else if (isToolCall) {
-            agentStatusRef.current[rawProfile] = {
-              status: 'tool',
-              toolName: toolName || 'tool',
-              start: agentStatusRef.current[rawProfile]?.start || now,
-              lastActive: now
-            };
-            setAgentStatus({ ...agentStatusRef.current });
-          } else if (isThinking || isGenerating) {
-            agentStatusRef.current[rawProfile] = {
-              status: isThinking ? 'thinking' : 'generating',
-              toolName: '',
-              start: agentStatusRef.current[rawProfile]?.start || now,
-              lastActive: now
-            };
-            setAgentStatus({ ...agentStatusRef.current });
+        setLastInferenceMap((prevMap) => ({
+          ...prevMap,
+          [rawProfile]: {
+            completedAt: now,
+            duration,
+            summary: prev?.toolName ? `ツール実行 (${prev.toolName})` : '思考・回答完了'
           }
+        }));
+
+        delete agentStatusRef.current[rawProfile];
+        setAgentStatus((prev) => {
+          const next = { ...prev };
+          delete next[rawProfile];
+          return next;
         });
+      } else if (isToolResult || isToolCall || isThinking || isGenerating) {
+        const nextStatus = {
+          status: isToolResult ? 'tool_completed' : isToolCall ? 'tool' : isThinking ? 'thinking' : 'generating',
+          toolName: isToolCall || isToolResult ? (toolName || 'tool') : '',
+          start: agentStatusRef.current[rawProfile]?.start || now,
+          lastActive: now
+        };
+        agentStatusRef.current[rawProfile] = nextStatus;
+        setAgentStatus({ ...agentStatusRef.current });
       }
-    } catch (err) {
-      console.error('[AgentActiveManager] onEvent error:', err);
-    }
+    });
+
     return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
   }, []);
 
-  // 4. 定期クリーンアップ（設定された idleMs 以上アクティブがないバックエンドを待機扱いに）
+  // アイドル時間経過によるバックエンド退避の検知
   useEffect(() => {
     const timer = setInterval(() => {
       const now = Date.now();
@@ -382,8 +234,7 @@ function AgentActiveManagerPane() {
         let changed = false;
         const next = new Set();
         for (const p of prev) {
-          const last = lastActiveRef.current[p] || 0;
-          if (now - last < idleThreshold || p === focusedProfileName) {
+          if (now - (lastActiveRef.current[p] || 0) < idleThreshold || p === focusedProfileName) {
             next.add(p);
           } else {
             changed = true;
@@ -395,29 +246,20 @@ function AgentActiveManagerPane() {
     return () => clearInterval(timer);
   }, [focusedProfileName, poolLimits.idleMs]);
 
-  // フォーカス中のプロファイルは常に稼働セットに含める
+  // フォーカス中プロファイルは常に稼働セットに維持
   useEffect(() => {
     if (focusedProfileName) {
       lastActiveRef.current[focusedProfileName] = Date.now();
-      setRunningProfiles((prev) => {
-        const next = new Set(prev);
-        next.add(focusedProfileName);
-        return next;
-      });
+      setRunningProfiles((prev) => new Set([...prev, focusedProfileName]));
     }
   }, [focusedProfileName]);
 
-  // 稼働状況サマリーの算出
   const runningList = useMemo(() => Array.from(runningProfiles), [runningProfiles]);
   const busyProfiles = useMemo(() => {
     return runningList.filter((name) => {
       const st = agentStatus[name];
       if (st && st.status !== 'tool_completed') return true;
-      // セッション単位のビジー状態もチェック
-      for (const [sid, bot] of Object.entries(sessionBotMap)) {
-        if (bot === name && busyBySession[sid]) return true;
-      }
-      return false;
+      return Object.entries(sessionBotMap).some(([sid, bot]) => bot === name && busyBySession[sid]);
     });
   }, [runningList, agentStatus, sessionBotMap, busyBySession]);
 
@@ -425,20 +267,17 @@ function AgentActiveManagerPane() {
   const runningCount = runningList.length;
   const isFull = runningCount >= maxBackends;
   const allRunningAreBusy = isFull && (busyProfiles.length >= runningCount);
+  const usagePct = Math.round((runningCount / maxBackends) * 100);
 
-  // 5. プロファイル切り替えの実行
+  // プロファイル切り替えの実行
   const performSwitch = async (targetBot, options = { expandSlot: false }) => {
     setIsSwitching(true);
     setSwitchFeedback(`"${targetBot}" へ切り替え中...`);
-
     const originalMax = maxBackends;
 
     try {
-      const isAlreadyRunning = runningProfiles.has(targetBot);
-
-      // 未起動のプロファイルを開く場合、スロット上限を一時的に+1拡張してタイムアウトを100%防止
-      if (!isAlreadyRunning || options.expandSlot) {
-        if (typeof window !== 'undefined' && window.hermesDesktop?.setPoolLimits) {
+      if (!runningProfiles.has(targetBot) || options.expandSlot) {
+        if (window.hermesDesktop?.setPoolLimits) {
           const newMax = Math.max(maxBackends + 1, runningCount + 1);
           setSwitchFeedback(`空き枠を一時拡張中 (${maxBackends} → ${newMax})...`);
           await window.hermesDesktop.setPoolLimits({ maxBackends: newMax });
@@ -447,7 +286,6 @@ function AgentActiveManagerPane() {
         }
       }
 
-      // セッション解決
       const matched = (rosterRef.current || []).find((p) => p.name === targetBot);
       let targetSessionId = matched?.canonical_session?.resolved_id || matched?.canonical_session?.id ||
                             matched?.last_session?.resolved_id || matched?.last_session?.id;
@@ -455,27 +293,23 @@ function AgentActiveManagerPane() {
       if (!targetSessionId) {
         const createSess = typeof host?.requestProfile === 'function'
           ? host.requestProfile(targetBot, 'session.create', {})
-          : host.request('session.create', { profile: targetBot });
-        const createRes = await createSess.catch(() => null);
+          : host.request?.('session.create', { profile: targetBot });
+        const createRes = await createSess?.catch(() => null);
         targetSessionId = createRes?.session?.id || createRes?.id;
       }
 
       if (targetSessionId) {
-        if (typeof host?.ensureAgent === 'function') await host.ensureAgent(targetSessionId, targetBot).catch(() => {});
+        await host?.ensureAgent?.(targetSessionId, targetBot).catch(() => {});
         if (typeof host?.switchSession === 'function') {
-          try {
-            await host.switchSession(targetSessionId, { targetProfile: targetBot });
-          } catch (_) {
-            if (typeof host?.navigate === 'function') host.navigate(`/${targetSessionId}`);
-          }
+          await host.switchSession(targetSessionId, { targetProfile: targetBot }).catch(() => host?.navigate?.(`/${targetSessionId}`));
         } else if (typeof host?.navigate === 'function') {
           host.navigate(`/${targetSessionId}`);
         } else if (typeof window !== 'undefined') {
           window.location.hash = `#/${targetSessionId}`;
         }
       } else {
-        if (typeof host?.ensureAgent === 'function') await host.ensureAgent(null, targetBot).catch(() => {});
-        if (typeof host?.navigate === 'function') host.navigate('/');
+        await host?.ensureAgent?.(null, targetBot).catch(() => {});
+        host?.navigate?.('/');
       }
 
       lastActiveRef.current[targetBot] = Date.now();
@@ -490,8 +324,7 @@ function AgentActiveManagerPane() {
       setIsSwitching(false);
       setPendingSwitchTarget(null);
 
-      // 一時拡張した場合、接続が安定した数秒後に元のスロット枠数に戻す
-      if (originalMax && typeof window !== 'undefined' && window.hermesDesktop?.setPoolLimits) {
+      if (originalMax && window.hermesDesktop?.setPoolLimits) {
         setTimeout(async () => {
           try {
             await window.hermesDesktop.setPoolLimits({ maxBackends: originalMax });
@@ -502,48 +335,34 @@ function AgentActiveManagerPane() {
     }
   };
 
-  // 切り替えボタンクリック時の安全判定
   const handleRequestSwitch = (targetBot) => {
     if (targetBot === focusedProfileName) return;
-
-    // スロットが満杯で、かつ稼働中の全エージェントが推論・作業中の場合のみ確認ダイアログ
     if (isFull && allRunningAreBusy && !runningProfiles.has(targetBot)) {
       setPendingSwitchTarget(targetBot);
       return;
     }
-
     performSwitch(targetBot, { expandSlot: false });
   };
 
-  // アイドルタイムアウトの即時変更
   const handleChangeIdleMs = async (ms) => {
     try {
-      if (typeof window !== 'undefined' && window.hermesDesktop?.setPoolLimits) {
-        await window.hermesDesktop.setPoolLimits({ idleMs: ms });
-        setPoolLimits((prev) => ({ ...prev, idleMs: ms }));
-        if (typeof host?.notify === 'function') {
-          host.notify(`アイドル解放時間を ${Math.round(ms / 60000)}分 に設定しました`);
-        }
-      }
+      await window.hermesDesktop?.setPoolLimits?.({ idleMs: ms });
+      setPoolLimits((prev) => ({ ...prev, idleMs: ms }));
+      host?.notify?.(`アイドル解放時間を ${Math.round(ms / 60000)}分 に設定しました`);
     } catch (err) {
       console.error('[AgentActiveManager] setPoolLimits idleMs error:', err);
     }
   };
 
-  // スロット枠上限の変更
   const handleChangeMaxBackends = async (delta) => {
     const nextVal = Math.max(1, Math.min(16, maxBackends + delta));
     try {
-      if (typeof window !== 'undefined' && window.hermesDesktop?.setPoolLimits) {
-        await window.hermesDesktop.setPoolLimits({ maxBackends: nextVal });
-        setPoolLimits((prev) => ({ ...prev, maxBackends: nextVal }));
-      }
+      await window.hermesDesktop?.setPoolLimits?.({ maxBackends: nextVal });
+      setPoolLimits((prev) => ({ ...prev, maxBackends: nextVal }));
     } catch (err) {
       console.error('[AgentActiveManager] setPoolLimits maxBackends error:', err);
     }
   };
-
-  const usagePct = Math.round((runningCount / maxBackends) * 100);
 
   return jsxs('div', {
     style: S.container,
@@ -555,72 +374,46 @@ function AgentActiveManagerPane() {
           jsxs('div', {
             style: S.header,
             children: [
-              jsxs('div', {
-                style: S.title,
-                children: [
-                  jsx('span', { children: '⚡' }),
-                  jsx('span', { children: 'BACKEND SLOT POOL' })
-                ]
-              }),
+              jsxs('div', { style: S.title, children: [jsx('span', { children: '⚡' }), jsx('span', { children: 'BACKEND SLOT POOL' })] }),
               jsxs('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '4px' },
                 children: [
-                  jsx('span', {
-                    style: S.badge(isFull ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', isFull ? '#ef4444' : '#10b981'),
-                    children: `${runningCount} / ${maxBackends} 枠使用中`
-                  }),
-                  jsx('button', {
-                    onClick: () => handleChangeMaxBackends(1),
-                    title: 'スロット枠を+1増やす',
-                    style: { ...S.button('secondary'), padding: '2px 6px', fontSize: '10px' },
-                    children: '+1'
-                  }),
-                  maxBackends > 1 && jsx('button', {
-                    onClick: () => handleChangeMaxBackends(-1),
-                    title: 'スロット枠を-1減らす',
-                    style: { ...S.button('secondary'), padding: '2px 6px', fontSize: '10px' },
-                    children: '-1'
-                  })
+                  Badge(`${runningCount} / ${maxBackends} 枠使用中`, isFull ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', isFull ? '#ef4444' : '#10b981'),
+                  Btn({ onClick: () => handleChangeMaxBackends(1), variant: 'secondary', title: 'スロット枠を+1増やす', style: { padding: '2px 6px', fontSize: '10px' }, children: '+1' }),
+                  maxBackends > 1 && Btn({ onClick: () => handleChangeMaxBackends(-1), variant: 'secondary', title: 'スロット枠を-1減らす', style: { padding: '2px 6px', fontSize: '10px' }, children: '-1' })
                 ]
               })
             ]
           }),
-
-          // ゲージバー
+          // プログレスバー
           jsx('div', {
-            style: S.progressTrack,
-            children: jsx('div', { style: S.progressBar(usagePct, isFull) })
+            style: { width: '100%', height: '6px', borderRadius: '3px', backgroundColor: 'rgba(0, 0, 0, 0.08)', overflow: 'hidden', marginTop: '6px', marginBottom: '8px' },
+            children: jsx('div', {
+              style: {
+                width: `${Math.min(100, Math.max(0, usagePct))}%`,
+                height: '100%',
+                backgroundColor: isFull ? '#ef4444' : usagePct > 66 ? '#f59e0b' : '#10b981',
+                transition: 'width 0.3s ease, background-color 0.3s ease'
+              }
+            })
           }),
-
-          // アイドル時間調整 & 説明
+          // アイドル時間調整
           jsxs('div', {
             style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: '#6b7280', marginTop: '4px' },
             children: [
               jsx('span', { children: `自動解放: ${Math.round(poolLimits.idleMs / 60000)}分後に退避` }),
               jsxs('div', {
                 style: { display: 'flex', gap: '4px' },
-                children: [
-                  jsx('button', {
-                    onClick: () => handleChangeIdleMs(120000),
-                    style: { ...S.button('secondary'), padding: '1px 5px', fontSize: '9px', fontWeight: poolLimits.idleMs === 120000 ? '700' : '400' },
-                    children: '2分'
-                  }),
-                  jsx('button', {
-                    onClick: () => handleChangeIdleMs(300000),
-                    style: { ...S.button('secondary'), padding: '1px 5px', fontSize: '9px', fontWeight: poolLimits.idleMs === 300000 ? '700' : '400' },
-                    children: '5分'
-                  }),
-                  jsx('button', {
-                    onClick: () => handleChangeIdleMs(600000),
-                    style: { ...S.button('secondary'), padding: '1px 5px', fontSize: '9px', fontWeight: poolLimits.idleMs === 600000 ? '700' : '400' },
-                    children: '10分'
-                  })
-                ]
+                children: [120000, 300000, 600000].map((ms) => Btn({
+                  key: ms,
+                  onClick: () => handleChangeIdleMs(ms),
+                  variant: 'secondary',
+                  style: { padding: '1px 5px', fontSize: '9px', fontWeight: poolLimits.idleMs === ms ? '700' : '400' },
+                  children: `${ms / 60000}分`
+                }))
               })
             ]
           }),
-
-          // フィードバックトースト
           switchFeedback && jsx('div', {
             style: {
               marginTop: '8px',
@@ -643,37 +436,26 @@ function AgentActiveManagerPane() {
           jsxs('div', {
             style: S.header,
             children: [
-              jsxs('div', {
-                style: { ...S.title, color: '#374151' },
-                children: [
-                  jsx('span', { children: '🤖' }),
-                  jsx('span', { children: 'AGENTS & INFERENCE STATE' })
-                ]
-              }),
-              jsx('span', {
-                style: { fontSize: '10px', color: '#9ca3af' },
-                children: busyProfiles.length > 0 ? `${busyProfiles.length}体 作業中` : '全エージェント待機中'
-              })
+              jsxs('div', { style: { ...S.title, color: '#374151' }, children: [jsx('span', { children: '🤖' }), jsx('span', { children: 'AGENTS & INFERENCE STATE' })] }),
+              jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length}体 作業中` : '全エージェント待機中' })
             ]
           }),
-
           jsxs('div', {
             style: { display: 'flex', flexDirection: 'column', gap: '8px' },
             children: roster.map((bot) => {
-              const botName = bot.name;
-              const isFocused = focusedProfileName === botName;
-              const isRunning = runningProfiles.has(botName);
-              const curStatus = agentStatus[botName];
-              const isBusy = (curStatus && curStatus.status !== 'tool_completed') ||
-                             Object.entries(sessionBotMap).some(([sid, b]) => b === botName && busyBySession[sid]);
-              const lastInference = lastInferenceMap[botName];
+              const name = bot.name;
+              const isFocused = focusedProfileName === name;
+              const isRunning = runningProfiles.has(name);
+              const cur = agentStatus[name];
+              const isBusy = (cur && cur.status !== 'tool_completed') || Object.entries(sessionBotMap).some(([sid, b]) => b === name && busyBySession[sid]);
+              const lastInf = lastInferenceMap[name];
 
               let statusLabel = '待機中 (未起動)';
               let statusBg = 'rgba(156, 163, 175, 0.1)';
               let statusColor = '#6b7280';
 
               if (isBusy) {
-                statusLabel = curStatus?.toolName ? `⚡ ツール実行中 (${curStatus.toolName})` : '🧠 推論・生成中';
+                statusLabel = cur?.toolName ? `⚡ ツール実行中 (${cur.toolName})` : '🧠 推論・生成中';
                 statusBg = 'rgba(245, 158, 11, 0.15)';
                 statusColor = '#d97706';
               } else if (isRunning) {
@@ -683,7 +465,7 @@ function AgentActiveManagerPane() {
               }
 
               return jsxs('div', {
-                key: botName,
+                key: name,
                 style: {
                   padding: '9px 10px',
                   borderRadius: '8px',
@@ -694,41 +476,38 @@ function AgentActiveManagerPane() {
                   gap: '5px'
                 },
                 children: [
-                  // 1行目: プロファイル名 + 状態バッジ + アクションボタン
                   jsxs('div', {
                     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
                     children: [
                       jsxs('div', {
                         style: { display: 'flex', alignItems: 'center', gap: '6px' },
                         children: [
-                          jsx('span', { style: { fontWeight: '700', fontSize: '12px' }, children: bot.display_name || botName }),
-                          isFocused && jsx('span', { style: S.badge('rgba(79, 70, 229, 0.15)', '#4f46e5'), children: '表示中' }),
-                          jsx('span', { style: S.badge(statusBg, statusColor), children: statusLabel })
+                          jsx('span', { style: { fontWeight: '700', fontSize: '12px' }, children: bot.display_name || name }),
+                          isFocused && Badge('表示中', 'rgba(79, 70, 229, 0.15)', '#4f46e5'),
+                          Badge(statusLabel, statusBg, statusColor)
                         ]
                       }),
-                      !isFocused && jsx('button', {
+                      !isFocused && Btn({
                         disabled: isSwitching,
-                        onClick: () => handleRequestSwitch(botName),
-                        style: S.button(isRunning ? 'secondary' : 'primary'),
+                        onClick: () => handleRequestSwitch(name),
+                        variant: isRunning ? 'secondary' : 'primary',
                         children: isRunning ? '開く' : '安全に切り替え ➔'
                       })
                     ]
                   }),
-
-                  // 2行目: 直前の推論履歴情報
                   jsxs('div', {
                     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10.5px', color: '#6b7280', marginTop: '1px' },
                     children: [
                       jsx('span', {
                         children: isBusy
                           ? '⏳ 現在リアルタイムでタスクを実行中'
-                          : lastInference
-                            ? `⏱ 直前の推論: ${formatRelativeTime(lastInference.completedAt)} (${lastInference.duration}秒 / ${lastInference.summary})`
+                          : lastInf
+                            ? `⏱ 直前の推論: ${formatRelativeTime(lastInf.completedAt)} (${lastInf.duration}秒 / ${lastInf.summary})`
                             : '⏱ 直前の推論: 記録なし (待機中)'
                       }),
                       isRunning && !isBusy && jsx('span', {
-                        style: { color: botName === 'default' ? '#6366f1' : '#059669', fontWeight: '500' },
-                        children: botName === 'default' ? '常駐 (コア)' : '退避可能'
+                        style: { color: name === 'default' ? '#6366f1' : '#059669', fontWeight: '500' },
+                        children: name === 'default' ? '常駐 (コア)' : '退避可能'
                       })
                     ]
                   })
@@ -760,8 +539,6 @@ function AgentActiveManagerPane() {
                 'このまま切り替えると、実行中のタスクが中断したり、スロット待ちでタイムアウト（エラー）になる可能性があります。'
               ]
             }),
-
-            // 作業中エージェントの一覧
             jsx('div', {
               style: { backgroundColor: 'rgba(0, 0, 0, 0.04)', borderRadius: '6px', padding: '8px 10px', marginBottom: '14px' },
               children: jsxs('div', {
@@ -783,24 +560,25 @@ function AgentActiveManagerPane() {
                 ]
               })
             }),
-
-            // アクションボタン
             jsxs('div', {
               style: { display: 'flex', flexDirection: 'column', gap: '6px' },
               children: [
-                jsx('button', {
+                Btn({
                   onClick: () => performSwitch(pendingSwitchTarget, { expandSlot: true }),
-                  style: { ...S.button('primary'), justifyContent: 'center', padding: '8px' },
+                  variant: 'primary',
+                  style: { justifyContent: 'center', padding: '8px' },
                   children: `一時的にスロットを+1拡張して安全に切り替える (${maxBackends} → ${maxBackends + 1})`
                 }),
-                jsx('button', {
+                Btn({
                   onClick: () => performSwitch(pendingSwitchTarget, { expandSlot: false }),
-                  style: { ...S.button('danger'), justifyContent: 'center', padding: '6px', fontSize: '10.5px' },
+                  variant: 'danger',
+                  style: { justifyContent: 'center', padding: '6px', fontSize: '10.5px' },
                   children: '強制的に切り替えを試みる（中断・タイムアウトのリスクあり）'
                 }),
-                jsx('button', {
+                Btn({
                   onClick: () => setPendingSwitchTarget(null),
-                  style: { ...S.button('secondary'), justifyContent: 'center', padding: '6px', marginTop: '4px' },
+                  variant: 'secondary',
+                  style: { justifyContent: 'center', padding: '6px', marginTop: '4px' },
                   children: 'キャンセル（現在の作業完了を待つ）'
                 })
               ]
@@ -812,7 +590,7 @@ function AgentActiveManagerPane() {
   });
 }
 
-// --- Hermes Desktop Plugin エクスポート ---
+// --- 4. Hermes Desktop Plugin エクスポート ---
 const PANES = PANES_AREA || 'panes';
 const ROUTES = ROUTES_AREA || 'routes';
 
