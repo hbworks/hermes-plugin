@@ -38,6 +38,61 @@ const formatRelativeTime = (timestamp) => {
   return `${hours}時間前`;
 };
 
+// マウスホバーによる勝手なプロファイル先行起動（Hover-intent prewarm）を完全抑止
+if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
+  window.__hermes_prewarm_blocked_v2 = true;
+
+  const isPrewarmElement = (el) => {
+    if (!el || typeof el.closest !== 'function') return false;
+    return Boolean(
+      // 1. プロファイルレール（横並びのボタン群）
+      el.closest('[data-slot*="profile"]') ||
+      el.closest('[data-tour*="profile"]') ||
+      // 2. サイドバー全体（セッション一覧、プロファイルアイコン、ボット一覧等）
+      el.closest('aside') ||
+      el.closest('nav') ||
+      el.closest('[data-slot="sidebar"]') ||
+      el.closest('[data-sidebar]') ||
+      // 3. ドロップダウンメニュー・ポップオーバー（プロファイル選択ドロップダウン）
+      el.closest('[role="menu"]') ||
+      el.closest('[role="menuitem"]') ||
+      el.closest('[role="menuitemradio"]') ||
+      el.closest('[data-radix-popper-content-wrapper]') ||
+      el.closest('[data-radix-collection-item]') ||
+      // 4. セッション行・エージェント行
+      el.closest('[data-slot="session-row"]') ||
+      el.closest('[data-roster-key]') ||
+      // 5. プロファイル名関連ボタン
+      el.closest('button[aria-label*="profile" i]') ||
+      el.closest('button[aria-label*="Profile" i]')
+    );
+  };
+
+  const blockPrewarm = (e) => {
+    if (isPrewarmElement(e.target)) {
+      e.stopImmediatePropagation();
+    }
+  };
+
+  // ホバー系イベントをキャプチャフェーズで完全に遮断
+  ['pointerenter', 'pointerover', 'mouseenter', 'mouseover'].forEach((type) => {
+    window.addEventListener(type, blockPrewarm, true);
+  });
+
+  // プラグインSDK経由のウォームアップも無効化
+  try {
+    const patchSdk = () => {
+      const sdk = window.__HERMES_PLUGIN_SDK__;
+      if (sdk?.host) {
+        sdk.host.warmProfile = () => {};
+        sdk.host.warmAgent = () => {};
+      }
+    };
+    patchSdk();
+    setInterval(patchSdk, 2000);
+  } catch (_) {}
+}
+
 // --- スタイル定義 ---
 const S = {
   container: {
@@ -376,27 +431,26 @@ function AgentActiveManagerPane() {
     setIsSwitching(true);
     setSwitchFeedback(`"${targetBot}" へ切り替え中...`);
 
+    const originalMax = maxBackends;
+
     try {
-      // 一時スロット拡張が指示された場合
-      if (options.expandSlot && typeof window !== 'undefined' && window.hermesDesktop?.setPoolLimits) {
-        const newMax = maxBackends + 1;
-        setSwitchFeedback(`スロット枠を一時的に ${newMax} に拡張中...`);
-        await window.hermesDesktop.setPoolLimits({ maxBackends: newMax });
-        setPoolLimits((prev) => ({ ...prev, maxBackends: newMax }));
+      const isAlreadyRunning = runningProfiles.has(targetBot);
+
+      // 未起動のプロファイルを開く場合、スロット上限を一時的に+1拡張してタイムアウトを100%防止
+      if (!isAlreadyRunning || options.expandSlot) {
+        if (typeof window !== 'undefined' && window.hermesDesktop?.setPoolLimits) {
+          const newMax = Math.max(maxBackends + 1, runningCount + 1);
+          setSwitchFeedback(`空き枠を一時拡張中 (${maxBackends} → ${newMax})...`);
+          await window.hermesDesktop.setPoolLimits({ maxBackends: newMax });
+          setPoolLimits((prev) => ({ ...prev, maxBackends: newMax }));
+          await new Promise((r) => setTimeout(r, 100));
+        }
       }
 
       // セッション解決
       const matched = (rosterRef.current || []).find((p) => p.name === targetBot);
       let targetSessionId = matched?.canonical_session?.resolved_id || matched?.canonical_session?.id ||
                             matched?.last_session?.resolved_id || matched?.last_session?.id;
-
-      if (!targetSessionId) {
-        const fetchSess = typeof host?.requestProfile === 'function'
-          ? host.requestProfile(targetBot, 'session.list', { limit: 3, include_hidden: true })
-          : host.request('session.list', { profile: targetBot, limit: 3, include_hidden: true });
-        const sessRes = await fetchSess.catch(() => null);
-        targetSessionId = sessRes?.sessions?.[0]?.id;
-      }
 
       if (!targetSessionId) {
         const createSess = typeof host?.requestProfile === 'function'
@@ -435,6 +489,16 @@ function AgentActiveManagerPane() {
     } finally {
       setIsSwitching(false);
       setPendingSwitchTarget(null);
+
+      // 一時拡張した場合、接続が安定した数秒後に元のスロット枠数に戻す
+      if (originalMax && typeof window !== 'undefined' && window.hermesDesktop?.setPoolLimits) {
+        setTimeout(async () => {
+          try {
+            await window.hermesDesktop.setPoolLimits({ maxBackends: originalMax });
+            setPoolLimits((prev) => ({ ...prev, maxBackends: originalMax }));
+          } catch (_) {}
+        }, 8000);
+      }
     }
   };
 
@@ -442,21 +506,12 @@ function AgentActiveManagerPane() {
   const handleRequestSwitch = (targetBot) => {
     if (targetBot === focusedProfileName) return;
 
-    // ターゲットがすでに起動している、またはスロットに空きがある場合はそのまま切り替え
-    const isAlreadyRunning = runningProfiles.has(targetBot);
-    if (isAlreadyRunning || runningCount < maxBackends) {
-      performSwitch(targetBot, { expandSlot: false });
-      return;
-    }
-
-    // スロットが満杯で、かつ稼働中の全エージェントが推論・作業中の場合
-    if (allRunningAreBusy) {
+    // スロットが満杯で、かつ稼働中の全エージェントが推論・作業中の場合のみ確認ダイアログ
+    if (isFull && allRunningAreBusy && !runningProfiles.has(targetBot)) {
       setPendingSwitchTarget(targetBot);
       return;
     }
 
-    // スロットは満杯だがアイドル中のエージェントがいる場合
-    // タイムアウトを確実に回避するため、スロット拡張または安全切り替えを行う
     performSwitch(targetBot, { expandSlot: false });
   };
 
@@ -639,7 +694,7 @@ function AgentActiveManagerPane() {
                   gap: '5px'
                 },
                 children: [
-                  // 1行目: プロファイル名 + 状態バッジ + 切り替えボタン
+                  // 1行目: プロファイル名 + 状態バッジ + アクションボタン
                   jsxs('div', {
                     style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
                     children: [
@@ -672,8 +727,8 @@ function AgentActiveManagerPane() {
                             : '⏱ 直前の推論: 記録なし (待機中)'
                       }),
                       isRunning && !isBusy && jsx('span', {
-                        style: { color: '#059669', fontWeight: '500' },
-                        children: '退避可能'
+                        style: { color: botName === 'default' ? '#6366f1' : '#059669', fontWeight: '500' },
+                        children: botName === 'default' ? '常駐 (コア)' : '退避可能'
                       })
                     ]
                   })

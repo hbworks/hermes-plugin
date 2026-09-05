@@ -2,6 +2,54 @@ import { host, useValue, PANES_AREA, ROUTES_AREA } from '@hermes/plugin-sdk';
 import { jsx, jsxs } from 'react/jsx-runtime';
 import React, { useState, useEffect, useRef } from 'react';
 
+// マウスホバーによる勝手なプロファイル先行起動（Hover-intent prewarm）を完全抑止
+if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
+  window.__hermes_prewarm_blocked_v2 = true;
+
+  const isPrewarmElement = (el) => {
+    if (!el || typeof el.closest !== 'function') return false;
+    return Boolean(
+      el.closest('[data-slot*="profile"]') ||
+      el.closest('[data-tour*="profile"]') ||
+      el.closest('aside') ||
+      el.closest('nav') ||
+      el.closest('[data-slot="sidebar"]') ||
+      el.closest('[data-sidebar]') ||
+      el.closest('[role="menu"]') ||
+      el.closest('[role="menuitem"]') ||
+      el.closest('[role="menuitemradio"]') ||
+      el.closest('[data-radix-popper-content-wrapper]') ||
+      el.closest('[data-radix-collection-item]') ||
+      el.closest('[data-slot="session-row"]') ||
+      el.closest('[data-roster-key]') ||
+      el.closest('button[aria-label*="profile" i]') ||
+      el.closest('button[aria-label*="Profile" i]')
+    );
+  };
+
+  const blockPrewarm = (e) => {
+    if (isPrewarmElement(e.target)) {
+      e.stopImmediatePropagation();
+    }
+  };
+
+  ['pointerenter', 'pointerover', 'mouseenter', 'mouseover'].forEach((type) => {
+    window.addEventListener(type, blockPrewarm, true);
+  });
+
+  try {
+    const patchSdk = () => {
+      const sdk = window.__HERMES_PLUGIN_SDK__;
+      if (sdk?.host) {
+        sdk.host.warmProfile = () => {};
+        sdk.host.warmAgent = () => {};
+      }
+    };
+    patchSdk();
+    setInterval(patchSdk, 2000);
+  } catch (_) {}
+}
+
 // --- 共通ヘルパー & 設定 ---
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
