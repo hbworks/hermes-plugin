@@ -40,7 +40,21 @@ const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.
 
 const formatRelativeTime = (ts) => {
   if (!ts) return '履歴なし';
-  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+  let timeMs = ts;
+  if (typeof ts === 'string') {
+    const clean = ts.trim();
+    if (!clean) return '履歴なし';
+    const iso = clean.includes('T')
+      ? (clean.endsWith('Z') || clean.includes('+') ? clean : clean + 'Z')
+      : clean.replace(' ', 'T') + 'Z';
+    const parsed = new Date(iso).getTime();
+    timeMs = isNaN(parsed) ? new Date(clean).getTime() : parsed;
+  } else if (typeof ts === 'number' && ts < 1e11) {
+    timeMs = ts * 1000;
+  }
+  if (!timeMs || isNaN(timeMs)) return '履歴なし';
+
+  const sec = Math.max(1, Math.floor((Date.now() - timeMs) / 1000));
   if (sec < 60) return `${sec}秒前`;
   const min = Math.floor(sec / 60);
   return min < 60 ? `${min}分前` : `${Math.floor(min / 60)}時間前`;
@@ -186,6 +200,8 @@ function AgentActiveManagerPane() {
       const payload = event.payload ?? event.data ?? event.message ?? event;
       const rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
       if (!rawProfile) return;
+
+      const now = Date.now();
 
       const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result);
       const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec']) || Boolean(payload?.tool || payload?.tool_call));
