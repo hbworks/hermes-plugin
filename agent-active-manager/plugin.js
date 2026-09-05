@@ -2,9 +2,22 @@ import { host, useValue, PANES_AREA, ROUTES_AREA } from '@hermes/plugin-sdk';
 import { jsx, jsxs } from 'react/jsx-runtime';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 
-// --- 1. ホバー先行起動（Hover-intent prewarm）抑止 ---
+// --- 1. ホバー先行起動（Hover-intent prewarm）タイマーの完全抑止 ---
 if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
   window.__hermes_prewarm_blocked_v2 = true;
+
+  // 120msの先行起動タイマー（useProfilePrewarm）を直接フックして完全無効化
+  const originalSetTimeout = window.setTimeout;
+  window.setTimeout = function(fn, delay, ...args) {
+    if (typeof fn === 'function' && delay === 120) {
+      const fnStr = fn.toString();
+      if (fnStr.includes('prewarmProfileBackend') || fnStr.includes('startPrewarm')) {
+        return -1;
+      }
+    }
+    return originalSetTimeout.call(this, fn, delay, ...args);
+  };
+
   const PREWARM_SEL = '[data-slot*="profile"],[data-tour*="profile"],aside,nav,[data-slot="sidebar"],[data-sidebar],[role="menu"],[role="menuitem"],[role="menuitemradio"],[data-radix-popper-content-wrapper],[data-radix-collection-item],[data-slot="session-row"],[data-roster-key],button[aria-label*="profile" i]';
   const block = (e) => { if (e.target?.closest?.(PREWARM_SEL)) e.stopImmediatePropagation(); };
   ['pointerenter', 'pointerover', 'mouseenter', 'mouseover'].forEach((t) => window.addEventListener(t, block, true));
@@ -43,11 +56,6 @@ const extractProfile = (ev, p, roster, sMap) => {
   const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
   if (sid && sMap[sid]) return sMap[sid];
 
-  if (roster?.length) {
-    const text = `${ev.type || ''} ${p?.text || ''} ${typeof p === 'string' ? p : ''}`.toLowerCase();
-    const found = roster.find((b) => b.name !== 'default' && (text.includes(`"${b.name.toLowerCase()}"`) || text.includes(`@${b.name.toLowerCase()}`) || text.includes(`[${b.name.toLowerCase()}]`)));
-    if (found) return found.name.toLowerCase();
-  }
   return '';
 };
 
@@ -179,15 +187,17 @@ function AgentActiveManagerPane() {
       const rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
       if (!rawProfile) return;
 
-      const now = Date.now();
-      lastActiveRef.current[rawProfile] = now;
-      setRunningProfiles((prev) => new Set([...prev, rawProfile]));
-
       const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result);
       const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec']) || Boolean(payload?.tool || payload?.tool_call));
       const isThinking = !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning));
       const isGenerating = !isToolCall && !isToolResult && !isThinking && (matchAny(eventType, ['stream', 'delta', 'message']) || Boolean(payload?.text));
       const isFinished = matchAny(eventType, ['turn.finish', 'turn.end', 'turn.complete', 'session.idle']);
+
+      // 実際の推論・生成・ツール実行が発生している場合のみ稼働中として記録
+      if (isToolResult || isToolCall || isThinking || isGenerating || isFinished) {
+        lastActiveRef.current[rawProfile] = now;
+        setRunningProfiles((prev) => new Set([...prev, rawProfile]));
+      }
 
       const toolName = (isToolCall || isToolResult) ? (payload?.tool?.name || payload?.tool || payload?.name || 'tool') : '';
 

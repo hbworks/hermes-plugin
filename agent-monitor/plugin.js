@@ -6,6 +6,17 @@ import React, { useState, useEffect, useRef } from 'react';
 if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
   window.__hermes_prewarm_blocked_v2 = true;
 
+  const originalSetTimeout = window.setTimeout;
+  window.setTimeout = function(fn, delay, ...args) {
+    if (typeof fn === 'function' && delay === 120) {
+      const fnStr = fn.toString();
+      if (fnStr.includes('prewarmProfileBackend') || fnStr.includes('startPrewarm')) {
+        return -1;
+      }
+    }
+    return originalSetTimeout.call(this, fn, delay, ...args);
+  };
+
   const isPrewarmElement = (el) => {
     if (!el || typeof el.closest !== 'function') return false;
     return Boolean(
@@ -80,15 +91,6 @@ const extractProfile = (ev, p, roster, sMap) => {
   const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
   if (sid && sMap[sid]) return sMap[sid];
 
-  if (roster && roster.length) {
-    const textStr = `${ev.type || ''} ${p?.text || ''} ${typeof p === 'string' ? p : ''}`.toLowerCase();
-    for (const b of roster) {
-      const bn = b.name.toLowerCase();
-      if (bn !== 'default' && (textStr.includes(`"${bn}"`) || textStr.includes(`@${bn}`) || textStr.includes(`[${bn}]`))) {
-        return bn;
-      }
-    }
-  }
   return '';
 };
 
