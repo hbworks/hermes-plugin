@@ -8,4 +8,4 @@ provides_tools:
   - run_wiki_skill_evolution
 provides_hooks:
   - post_tool_call
-  - session_end
+  - on_session_end
