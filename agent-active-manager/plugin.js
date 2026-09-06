@@ -75,15 +75,42 @@ const formatRelativeTime = (ts) => {
   return min < 60 ? `${min}分前` : `${Math.floor(min / 60)}時間前`;
 };
 
-const extractProfile = (ev, p, roster, sMap) => {
-  const direct = ev.profile || ev.agent || ev.bot || ev.speaker || ev.sender ||
-                 p?.profile || p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.sender || p?.role || p?.agentName;
+const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
+  const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
+
+  // 1. すでに登録済みのセッションIDから特定
+  if (sid && sMap[sid]) return sMap[sid];
+
+  // 2. 現在開いているセッションIDと一致する場合、フォーカス中のプロファイルを即時学習
+  if (sid && focusedSid && sid === focusedSid && focusedProfile) {
+    sMap[sid] = focusedProfile;
+    return focusedProfile;
+  }
+
+  // 3. ペイロード内の直接のボット指定（※ role は除外）
+  const direct = ev.agent || ev.bot || ev.speaker ||
+                 p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.agentName;
   if (typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
+
+  // 4. from フィールド
   if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
   if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
 
-  const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
-  if (sid && sMap[sid]) return sMap[sid];
+  // 5. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
+  const evProf = (ev.profile || p?.profile || '').trim().toLowerCase();
+  if (evProf) {
+    if (evProf === 'default' && focusedProfile && focusedProfile !== 'default') {
+      if (sid) sMap[sid] = focusedProfile;
+      return focusedProfile;
+    }
+    return evProf;
+  }
+
+  // 6. フォーカス中プロファイルへのフォールバック
+  if (focusedProfile) {
+    if (sid) sMap[sid] = focusedProfile;
+    return focusedProfile;
+  }
 
   return '';
 };
@@ -136,6 +163,8 @@ function AgentActiveManagerPane() {
   const busyBySession = useValue(host.state?.busyBySession) || {};
   const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile;
   const focusedProfileName = useValue(focusedProfileAtom) || 'default';
+  const focusedSidAtom = host.state?.focusedSessionId || host.state?.focusedStoredSessionId;
+  const focusedSessionId = useValue(focusedSidAtom) || '';
 
   const [poolLimits, setPoolLimits] = useState({ maxBackends: 3, idleMs: 600000 });
   const [roster, setRoster] = useState([]);
@@ -151,6 +180,10 @@ function AgentActiveManagerPane() {
   const sessionBotMapRef = useRef({});
   const agentStatusRef = useRef({});
   const lastActiveRef = useRef({});
+  const focusedProfileRef = useRef(focusedProfileName);
+  focusedProfileRef.current = focusedProfileName;
+  const focusedSidRef = useRef(focusedSessionId);
+  focusedSidRef.current = focusedSessionId;
 
   // プール制限設定の読み込み
   const fetchPoolLimits = async () => {
@@ -235,22 +268,24 @@ function AgentActiveManagerPane() {
       if (!event) return;
       const eventType = (event.type || event.event || '').toLowerCase();
       const payload = event.payload ?? event.data ?? event.message ?? event;
-      let rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
+      const rawProfile = extractProfile(
+        event,
+        payload,
+        rosterRef.current,
+        sessionBotMapRef.current,
+        focusedProfileRef.current,
+        focusedSidRef.current
+      );
+
+      if (!rawProfile) return;
+
+      const now = Date.now();
 
       const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result);
       const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec']) || Boolean(payload?.tool || payload?.tool_call));
       const isThinking = !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning));
       const isGenerating = !isToolCall && !isToolResult && !isThinking && (matchAny(eventType, ['stream', 'delta', 'message']) || Boolean(payload?.text));
       const isFinished = matchAny(eventType, ['turn.finish', 'turn.end', 'turn.complete', 'session.idle']);
-
-      // プロファイル名が直接特定できない場合、現在フォーカス中のエージェントをフォールバック
-      if (!rawProfile && (isToolResult || isToolCall || isThinking || isGenerating || isFinished)) {
-        const focused = String(focusedProfileAtom?.get?.() || focusedProfileName || '').trim().toLowerCase();
-        if (focused) rawProfile = focused;
-      }
-      if (!rawProfile) return;
-
-      const now = Date.now();
 
       // 実際の推論・生成・ツール実行が発生している場合のみ稼働中として記録
       if (isToolResult || isToolCall || isThinking || isGenerating || isFinished) {
