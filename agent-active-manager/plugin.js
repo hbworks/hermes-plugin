@@ -35,7 +35,22 @@ if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
   }, 1000);
 }
 
-// --- 2. 共通ヘルパー関数 ---
+// --- 2. 共通ヘルパー関数 & 永続化 ---
+const LAST_INF_KEY = 'hermes_active_manager_last_inferences_v2';
+const loadStoredInferences = () => {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LAST_INF_KEY) : null;
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) { return {}; }
+};
+const saveStoredInferences = (map) => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LAST_INF_KEY, JSON.stringify(map));
+    }
+  } catch (_) {}
+};
+
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
 const formatRelativeTime = (ts) => {
@@ -62,7 +77,7 @@ const formatRelativeTime = (ts) => {
 
 const extractProfile = (ev, p, roster, sMap) => {
   const direct = ev.profile || ev.agent || ev.bot || ev.speaker || ev.sender ||
-                 p?.profile || p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.sender || p?.role;
+                 p?.profile || p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.sender || p?.role || p?.agentName;
   if (typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
   if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
   if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
@@ -126,7 +141,7 @@ function AgentActiveManagerPane() {
   const [roster, setRoster] = useState([]);
   const [sessionBotMap, setSessionBotMap] = useState({});
   const [agentStatus, setAgentStatus] = useState({});
-  const [lastInferenceMap, setLastInferenceMap] = useState({});
+  const [lastInferenceMap, setLastInferenceMap] = useState(loadStoredInferences);
   const [runningProfiles, setRunningProfiles] = useState(new Set());
   const [isSwitching, setIsSwitching] = useState(false);
   const [switchFeedback, setSwitchFeedback] = useState(null);
@@ -181,6 +196,28 @@ function AgentActiveManagerPane() {
         }
         sessionBotMapRef.current = { ...sessionBotMapRef.current, ...mapUpdate };
         setSessionBotMap((prev) => ({ ...prev, ...mapUpdate }));
+
+        // プロファイルに紐づく過去のセッション更新日時の初期補完
+        setLastInferenceMap((prev) => {
+          const next = { ...prev };
+          let changed = false;
+          for (const p of sorted) {
+            if (!next[p.name]) {
+              const cs = p.canonical_session || p.last_session;
+              const updatedAt = cs?.updated_at || p.updated_at;
+              if (updatedAt) {
+                next[p.name] = {
+                  completedAt: updatedAt,
+                  duration: null,
+                  summary: '過去の会話履歴'
+                };
+                changed = true;
+              }
+            }
+          }
+          if (changed) saveStoredInferences(next);
+          return changed ? next : prev;
+        });
       } catch (err) {
         console.debug('[AgentActiveManager] syncRoster error:', err);
       }
@@ -198,16 +235,22 @@ function AgentActiveManagerPane() {
       if (!event) return;
       const eventType = (event.type || event.event || '').toLowerCase();
       const payload = event.payload ?? event.data ?? event.message ?? event;
-      const rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
-      if (!rawProfile) return;
-
-      const now = Date.now();
+      let rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
 
       const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result);
       const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec']) || Boolean(payload?.tool || payload?.tool_call));
       const isThinking = !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning));
       const isGenerating = !isToolCall && !isToolResult && !isThinking && (matchAny(eventType, ['stream', 'delta', 'message']) || Boolean(payload?.text));
       const isFinished = matchAny(eventType, ['turn.finish', 'turn.end', 'turn.complete', 'session.idle']);
+
+      // プロファイル名が直接特定できない場合、現在フォーカス中のエージェントをフォールバック
+      if (!rawProfile && (isToolResult || isToolCall || isThinking || isGenerating || isFinished)) {
+        const focused = String(focusedProfileAtom?.get?.() || focusedProfileName || '').trim().toLowerCase();
+        if (focused) rawProfile = focused;
+      }
+      if (!rawProfile) return;
+
+      const now = Date.now();
 
       // 実際の推論・生成・ツール実行が発生している場合のみ稼働中として記録
       if (isToolResult || isToolCall || isThinking || isGenerating || isFinished) {
@@ -221,14 +264,18 @@ function AgentActiveManagerPane() {
         const prev = agentStatusRef.current[rawProfile];
         const duration = Math.max(1, Math.round((now - (prev?.start || (now - 2000))) / 1000));
 
-        setLastInferenceMap((prevMap) => ({
-          ...prevMap,
-          [rawProfile]: {
-            completedAt: now,
-            duration,
-            summary: prev?.toolName ? `ツール実行 (${prev.toolName})` : '思考・回答完了'
-          }
-        }));
+        setLastInferenceMap((prevMap) => {
+          const nextMap = {
+            ...prevMap,
+            [rawProfile]: {
+              completedAt: now,
+              duration,
+              summary: prev?.toolName ? `ツール実行 (${prev.toolName})` : '思考・回答完了'
+            }
+          };
+          saveStoredInferences(nextMap);
+          return nextMap;
+        });
 
         delete agentStatusRef.current[rawProfile];
         setAgentStatus((prev) => {
@@ -463,7 +510,7 @@ function AgentActiveManagerPane() {
             style: S.header,
             children: [
               jsxs('div', { style: { ...S.title, color: '#374151' }, children: [jsx('span', { children: '🤖' }), jsx('span', { children: 'AGENTS & INFERENCE STATE' })] }),
-              jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length}体 作業中` : '全エージェント待機中' })
+              jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length}体 タスク実行中` : '全エージェント アイドル' })
             ]
           }),
           jsxs('div', {
@@ -528,12 +575,14 @@ function AgentActiveManagerPane() {
                         children: isBusy
                           ? '⏳ 現在リアルタイムでタスクを実行中'
                           : lastInf
-                            ? `⏱ 直前の推論: ${formatRelativeTime(lastInf.completedAt)} (${lastInf.duration}秒 / ${lastInf.summary})`
-                            : '⏱ 直前の推論: 記録なし (待機中)'
+                            ? `⏱ 直前の推論: ${formatRelativeTime(lastInf.completedAt)}${lastInf.duration ? ` (${lastInf.duration}秒 / ${lastInf.summary})` : ` (${lastInf.summary})`}`
+                            : isRunning
+                              ? '⏱ 直前の推論: 履歴なし (スタンバイ)'
+                              : '⏱ 直前の推論: なし (未起動)'
                       }),
                       isRunning && !isBusy && jsx('span', {
-                        style: { color: name === 'default' ? '#6366f1' : '#059669', fontWeight: '500' },
-                        children: name === 'default' ? '常駐 (コア)' : '退避可能'
+                        style: { color: isFocused ? '#6366f1' : '#059669', fontWeight: '600' },
+                        children: isFocused ? '常駐 (退避不可)' : '退避可能'
                       })
                     ]
                   })
