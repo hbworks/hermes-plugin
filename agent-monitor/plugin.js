@@ -555,6 +555,18 @@ function AgentActivityPane() {
                         ]
                       }),
                       jsx('span', {
+                        style: {
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          color: '#1c1c1e',
+                          maxWidth: '75px',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        },
+                        children: displayName
+                      }),
+                      jsx('span', {
                         style: S.tag(
                           bState.isTeam ? 'rgba(139, 92, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
                           bState.isTeam ? '#8b5cf6' : '#10b981'
