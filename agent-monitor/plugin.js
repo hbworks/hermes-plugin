@@ -81,15 +81,42 @@ const getActivityTypeMeta = (type) => {
   return { icon: '💬', color: '#3b82f6' };
 };
 
-const extractProfile = (ev, p, roster, sMap) => {
-  const direct = ev.profile || ev.agent || ev.bot || ev.speaker || ev.sender ||
-                 p?.profile || p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.sender || p?.role;
+const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
+  const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
+
+  // 1. 既知のセッションIDから特定
+  if (sid && sMap[sid]) return sMap[sid];
+
+  // 2. 現在開いているセッションIDと一致する場合、フォーカス中のプロファイルを即時学習
+  if (sid && focusedSid && sid === focusedSid && focusedProfile) {
+    sMap[sid] = focusedProfile;
+    return focusedProfile;
+  }
+
+  // 3. ペイロード内の直接のボット指定（※ role は除外）
+  const direct = ev.agent || ev.bot || ev.speaker ||
+                 p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.agentName;
   if (direct && typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
+
+  // 4. from フィールド
   if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
   if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
 
-  const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
-  if (sid && sMap[sid]) return sMap[sid];
+  // 5. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
+  const evProf = (ev.profile || p?.profile || '').trim().toLowerCase();
+  if (evProf) {
+    if (evProf === 'default' && focusedProfile && focusedProfile !== 'default') {
+      if (sid) sMap[sid] = focusedProfile;
+      return focusedProfile;
+    }
+    return evProf;
+  }
+
+  // 6. フォーカス中プロファイルへのフォールバック
+  if (focusedProfile) {
+    if (sid) sMap[sid] = focusedProfile;
+    return focusedProfile;
+  }
 
   return '';
 };
@@ -172,6 +199,8 @@ function AgentActivityPane() {
   const busyBySession = useValue(host.state.busyBySession) || {};
   const focusedProfileAtom = host.state.focusedSessionProfile || host.state.profile;
   const focusedProfileName = useValue(focusedProfileAtom) || 'default';
+  const focusedSidAtom = host.state.focusedSessionId || host.state.focusedStoredSessionId;
+  const focusedSessionId = useValue(focusedSidAtom) || '';
 
   const [activities, setActivities] = useState([]);
   const [roster, setRoster] = useState([]);
@@ -186,6 +215,10 @@ function AgentActivityPane() {
   const agentStatusMapRef = useRef({});
   const rosterRef = useRef([]);
   const sessionBotMapRef = useRef({});
+  const focusedProfileRef = useRef(focusedProfileName);
+  focusedProfileRef.current = focusedProfileName;
+  const focusedSidRef = useRef(focusedSessionId);
+  focusedSidRef.current = focusedSessionId;
 
   // 1. プロファイル一覧・アバター・セッションの同期
   useEffect(() => {
@@ -319,7 +352,14 @@ function AgentActivityPane() {
             if (!hasActivity) return;
           }
 
-          const rawProfile = extractProfile(event, payload, rosterRef.current, sessionBotMapRef.current);
+          const rawProfile = extractProfile(
+            event,
+            payload,
+            rosterRef.current,
+            sessionBotMapRef.current,
+            focusedProfileRef.current,
+            focusedSidRef.current
+          );
           const sid = event.sessionId || event.session_id || payload?.sessionId;
 
           let textChunk = typeof payload === 'string' ? payload : (payload?.text || (payload?.content ? (typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content)) : ''));
