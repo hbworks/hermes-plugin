@@ -261,6 +261,35 @@ function AgentActiveManagerPane() {
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
+  // 推論完了・スタンバイ復帰の共通処理
+  const markInferenceFinished = (targetProfile, reason = '思考・回答完了') => {
+    if (!targetProfile) return;
+    const now = Date.now();
+    const prev = agentStatusRef.current[targetProfile];
+    const duration = prev?.start ? Math.max(1, Math.round((now - prev.start) / 1000)) : null;
+
+    setLastInferenceMap((prevMap) => {
+      const nextMap = {
+        ...prevMap,
+        [targetProfile]: {
+          completedAt: now,
+          duration: duration || prevMap[targetProfile]?.duration || 1,
+          summary: prev?.toolName ? `ツール実行 (${prev.toolName})` : reason
+        }
+      };
+      saveStoredInferences(nextMap);
+      return nextMap;
+    });
+
+    delete agentStatusRef.current[targetProfile];
+    setAgentStatus((prev) => {
+      if (!prev[targetProfile]) return prev;
+      const next = { ...prev };
+      delete next[targetProfile];
+      return next;
+    });
+  };
+
   // Gatewayイベントの監視（推論状態と直前推論履歴）
   useEffect(() => {
     if (typeof host?.onEvent !== 'function') return;
@@ -268,6 +297,17 @@ function AgentActiveManagerPane() {
       if (!event) return;
       const eventType = (event.type || event.event || '').toLowerCase();
       const payload = event.payload ?? event.data ?? event.message ?? event;
+
+      // ノイズ除外（アクティビティのないシステム通知）
+      if (matchAny(eventType, ['gateway.', 'sessions.', 'profiles.', 'skin.', 'theme.'])) {
+        const hasActivity = payload?.text || payload?.content || payload?.delta || payload?.tool || payload?.error;
+        if (!hasActivity) return;
+      }
+
+      // ユーザー入力メッセージやシステム内部通知そのものはエージェント生成中ではないため除外
+      const role = payload?.role || payload?.message?.role || event.role;
+      if (role === 'user' || role === 'system') return;
+
       const rawProfile = extractProfile(
         event,
         payload,
@@ -281,11 +321,39 @@ function AgentActiveManagerPane() {
 
       const now = Date.now();
 
-      const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result);
-      const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec']) || Boolean(payload?.tool || payload?.tool_call));
-      const isThinking = !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning));
-      const isGenerating = !isToolCall && !isToolResult && !isThinking && (matchAny(eventType, ['stream', 'delta', 'message']) || Boolean(payload?.text));
-      const isFinished = matchAny(eventType, ['turn.finish', 'turn.end', 'turn.complete', 'session.idle']);
+      // 完了・終了シグナルの総合判定
+      const isFinished = matchAny(eventType, [
+        'turn.finish', 'turn.end', 'turn.complete', 'turn.finished',
+        'chat.complete', 'chat.finish',
+        'agent.finish', 'agent.idle',
+        'session.idle', 'session.finish',
+        'run.finish', 'run.complete',
+        'stream.finish', 'stream.end',
+        'generation.finish', 'generation.complete'
+      ]) ||
+      eventType.endsWith('.finish') ||
+      eventType.endsWith('.complete') ||
+      eventType.endsWith('.end') ||
+      eventType.endsWith('.idle') ||
+      eventType.endsWith('.done') ||
+      Boolean(payload?.finish_reason) ||
+      payload?.done === true ||
+      payload?.status === 'completed';
+
+      // ツール関連
+      const isToolResult = !isFinished && (matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result) || role === 'tool');
+      const isToolCall = !isFinished && !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec', 'action']) || Boolean(payload?.tool || payload?.tool_call || payload?.function));
+
+      // 思考中
+      const isThinking = !isFinished && !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning || payload?.thought));
+
+      // ストリーム生成中（単なる完了メッセージ通知やpayload.textで誤検知しないようストリーム/差分に限定）
+      const isDelta = matchAny(eventType, ['delta', 'stream', 'chunk']) || Boolean(payload?.delta);
+      const isGenerating = !isFinished && !isToolCall && !isToolResult && !isThinking && (
+        isDelta ||
+        matchAny(eventType, ['agent.stream', 'generate', 'generation']) ||
+        (matchAny(eventType, ['turn.progress']) && Boolean(payload?.text || payload?.content))
+      );
 
       // 実際の推論・生成・ツール実行が発生している場合のみ稼働中として記録
       if (isToolResult || isToolCall || isThinking || isGenerating || isFinished) {
@@ -293,31 +361,12 @@ function AgentActiveManagerPane() {
         setRunningProfiles((prev) => new Set([...prev, rawProfile]));
       }
 
-      const toolName = (isToolCall || isToolResult) ? (payload?.tool?.name || payload?.tool || payload?.name || 'tool') : '';
+      const toolName = (isToolCall || isToolResult)
+        ? (payload?.tool?.name || payload?.tool || payload?.name || payload?.function?.name || payload?.action || 'tool')
+        : '';
 
       if (isFinished) {
-        const prev = agentStatusRef.current[rawProfile];
-        const duration = Math.max(1, Math.round((now - (prev?.start || (now - 2000))) / 1000));
-
-        setLastInferenceMap((prevMap) => {
-          const nextMap = {
-            ...prevMap,
-            [rawProfile]: {
-              completedAt: now,
-              duration,
-              summary: prev?.toolName ? `ツール実行 (${prev.toolName})` : '思考・回答完了'
-            }
-          };
-          saveStoredInferences(nextMap);
-          return nextMap;
-        });
-
-        delete agentStatusRef.current[rawProfile];
-        setAgentStatus((prev) => {
-          const next = { ...prev };
-          delete next[rawProfile];
-          return next;
-        });
+        markInferenceFinished(rawProfile);
       } else if (isToolResult || isToolCall || isThinking || isGenerating) {
         const nextStatus = {
           status: isToolResult ? 'tool_completed' : isToolCall ? 'tool' : isThinking ? 'thinking' : 'generating',
@@ -332,6 +381,60 @@ function AgentActiveManagerPane() {
 
     return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
   }, []);
+
+  // 推論状態の自動クリーンアップ・タイムアウト監視（ウォッチドッグ）
+  useEffect(() => {
+    const watchdog = setInterval(() => {
+      const now = Date.now();
+      const currentStatus = { ...agentStatusRef.current };
+      let changed = false;
+
+      for (const [name, st] of Object.entries(currentStatus)) {
+        if (!st) continue;
+        const lastActive = st.lastActive || lastActiveRef.current[name] || 0;
+        const idleFor = now - lastActive;
+
+        // 該当プロファイルに紐づくセッションの busyBySession 状態を判定
+        const isSessionBusy = Object.entries(sessionBotMapRef.current).some(([sid, bot]) => bot === name && busyBySession[sid]);
+
+        // 判定条件1: tool_completed 状態が 3秒以上経過したら完了
+        const toolFinished = st.status === 'tool_completed' && idleFor >= 3000;
+
+        // 判定条件2: セッションが非busy かつ イベントが 3秒以上停止している
+        const sessionBecameIdle = !isSessionBusy && idleFor >= 3000;
+
+        // 判定条件3: busyBySessionの状態にかかわらず、イベントが 10秒以上完全に途絶えた（タイムアウト自動復旧）
+        const eventTimedOut = idleFor >= 10000;
+
+        if (toolFinished || sessionBecameIdle || eventTimedOut) {
+          const duration = st.start ? Math.max(1, Math.round((now - st.start) / 1000)) : null;
+          const summary = st.toolName ? `ツール実行 (${st.toolName})` : '思考・回答完了';
+
+          setLastInferenceMap((prevMap) => {
+            const nextMap = {
+              ...prevMap,
+              [name]: {
+                completedAt: now,
+                duration: duration || 1,
+                summary
+              }
+            };
+            saveStoredInferences(nextMap);
+            return nextMap;
+          });
+
+          delete agentStatusRef.current[name];
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        setAgentStatus({ ...agentStatusRef.current });
+      }
+    }, 1000);
+
+    return () => clearInterval(watchdog);
+  }, [busyBySession]);
 
   // アイドル時間経過によるバックエンド退避の検知
   useEffect(() => {
@@ -545,7 +648,21 @@ function AgentActiveManagerPane() {
             style: S.header,
             children: [
               jsxs('div', { style: { ...S.title, color: '#374151' }, children: [jsx('span', { children: '🤖' }), jsx('span', { children: 'AGENTS & INFERENCE STATE' })] }),
-              jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length}体 タスク実行中` : '全エージェント アイドル' })
+              jsxs('div', {
+                style: { display: 'flex', alignItems: 'center', gap: '6px' },
+                children: [
+                  jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length}体 タスク実行中` : '全エージェント アイドル' }),
+                  busyProfiles.length > 0 && Btn({
+                    onClick: () => {
+                      for (const b of busyProfiles) markInferenceFinished(b, '手動でスタンバイへ復旧');
+                    },
+                    variant: 'secondary',
+                    style: { padding: '2px 6px', fontSize: '10px', color: '#4b5563' },
+                    title: 'すべてのエージェントの推論ステータスをスタンバイに戻します',
+                    children: '↺ スタンバイに戻す'
+                  })
+                ]
+              })
             ]
           }),
           jsxs('div', {
@@ -595,11 +712,23 @@ function AgentActiveManagerPane() {
                           Badge(statusLabel, statusBg, statusColor)
                         ]
                       }),
-                      !isFocused && Btn({
-                        disabled: isSwitching,
-                        onClick: () => handleRequestSwitch(name),
-                        variant: isRunning ? 'secondary' : 'primary',
-                        children: isRunning ? '開く' : '安全に切り替え ➔'
+                      jsxs('div', {
+                        style: { display: 'flex', alignItems: 'center', gap: '4px' },
+                        children: [
+                          isBusy && Btn({
+                            onClick: () => markInferenceFinished(name, '手動でスタンバイへ復旧'),
+                            variant: 'secondary',
+                            style: { padding: '3px 6px', fontSize: '10px' },
+                            title: '推論ステータスをスタンバイへ戻す',
+                            children: '↺ スタンバイ'
+                          }),
+                          !isFocused && Btn({
+                            disabled: isSwitching,
+                            onClick: () => handleRequestSwitch(name),
+                            variant: isRunning ? 'secondary' : 'primary',
+                            children: isRunning ? '開く' : '安全に切り替え ➔'
+                          })
+                        ]
                       })
                     ]
                   }),
