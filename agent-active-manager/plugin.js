@@ -54,11 +54,11 @@ const saveStoredInferences = (map) => {
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
 const formatRelativeTime = (ts) => {
-  if (!ts) return '履歴なし';
+  if (!ts) return 'None';
   let timeMs = ts;
   if (typeof ts === 'string') {
     const clean = ts.trim();
-    if (!clean) return '履歴なし';
+    if (!clean) return 'None';
     const iso = clean.includes('T')
       ? (clean.endsWith('Z') || clean.includes('+') ? clean : clean + 'Z')
       : clean.replace(' ', 'T') + 'Z';
@@ -67,12 +67,12 @@ const formatRelativeTime = (ts) => {
   } else if (typeof ts === 'number' && ts < 1e11) {
     timeMs = ts * 1000;
   }
-  if (!timeMs || isNaN(timeMs)) return '履歴なし';
+  if (!timeMs || isNaN(timeMs)) return 'None';
 
   const sec = Math.max(1, Math.floor((Date.now() - timeMs) / 1000));
-  if (sec < 60) return `${sec}秒前`;
+  if (sec < 60) return `${sec}s ago`;
   const min = Math.floor(sec / 60);
-  return min < 60 ? `${min}分前` : `${Math.floor(min / 60)}時間前`;
+  return min < 60 ? `${min}m ago` : `${Math.floor(min / 60)}h ago`;
 };
 
 const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
@@ -242,7 +242,7 @@ function AgentActiveManagerPane() {
                 next[p.name] = {
                   completedAt: updatedAt,
                   duration: null,
-                  summary: '過去の会話履歴'
+                  summary: 'History'
                 };
                 changed = true;
               }
@@ -262,7 +262,7 @@ function AgentActiveManagerPane() {
   }, []);
 
   // 推論完了・スタンバイ復帰の共通処理
-  const markInferenceFinished = (targetProfile, reason = '思考・回答完了') => {
+  const markInferenceFinished = (targetProfile, reason = 'Done') => {
     if (!targetProfile) return;
     const now = Date.now();
     const prev = agentStatusRef.current[targetProfile];
@@ -274,7 +274,7 @@ function AgentActiveManagerPane() {
         [targetProfile]: {
           completedAt: now,
           duration: duration || prevMap[targetProfile]?.duration || 1,
-          summary: prev?.toolName ? `ツール実行 (${prev.toolName})` : reason
+          summary: prev?.toolName ? `Tool: ${prev.toolName}` : reason
         }
       };
       saveStoredInferences(nextMap);
@@ -408,7 +408,7 @@ function AgentActiveManagerPane() {
 
         if (toolFinished || sessionBecameIdle || eventTimedOut) {
           const duration = st.start ? Math.max(1, Math.round((now - st.start) / 1000)) : null;
-          const summary = st.toolName ? `ツール実行 (${st.toolName})` : '思考・回答完了';
+          const summary = st.toolName ? `Tool: ${st.toolName}` : 'Done';
 
           setLastInferenceMap((prevMap) => {
             const nextMap = {
@@ -483,14 +483,14 @@ function AgentActiveManagerPane() {
   // プロファイル切り替えの実行
   const performSwitch = async (targetBot, options = { expandSlot: false }) => {
     setIsSwitching(true);
-    setSwitchFeedback(`"${targetBot}" へ切り替え中...`);
+    setSwitchFeedback(`Switching to "${targetBot}"...`);
     const originalMax = maxBackends;
 
     try {
       if (!runningProfiles.has(targetBot) || options.expandSlot) {
         if (window.hermesDesktop?.setPoolLimits) {
           const newMax = Math.max(maxBackends + 1, runningCount + 1);
-          setSwitchFeedback(`空き枠を一時拡張中 (${maxBackends} → ${newMax})...`);
+          setSwitchFeedback(`Expanding slot (${maxBackends} → ${newMax})...`);
           await window.hermesDesktop.setPoolLimits({ maxBackends: newMax });
           setPoolLimits((prev) => ({ ...prev, maxBackends: newMax }));
           await new Promise((r) => setTimeout(r, 100));
@@ -525,11 +525,11 @@ function AgentActiveManagerPane() {
 
       lastActiveRef.current[targetBot] = Date.now();
       setRunningProfiles((prev) => new Set([...prev, targetBot]));
-      setSwitchFeedback(`✅ "${targetBot}" に安全に切り替えました`);
+      setSwitchFeedback(`✅ Switched to "${targetBot}"`);
       setTimeout(() => setSwitchFeedback(null), 3000);
     } catch (err) {
       console.error('[AgentActiveManager] performSwitch error:', err);
-      setSwitchFeedback(`❌ 切り替え失敗: ${err?.message || err}`);
+      setSwitchFeedback(`❌ Switch failed: ${err?.message || err}`);
       setTimeout(() => setSwitchFeedback(null), 5000);
     } finally {
       setIsSwitching(false);
@@ -559,7 +559,7 @@ function AgentActiveManagerPane() {
     try {
       await window.hermesDesktop?.setPoolLimits?.({ idleMs: ms });
       setPoolLimits((prev) => ({ ...prev, idleMs: ms }));
-      host?.notify?.(`アイドル解放時間を ${Math.round(ms / 60000)}分 に設定しました`);
+      host?.notify?.(`Idle timeout set to ${Math.round(ms / 60000)}m`);
     } catch (err) {
       console.error('[AgentActiveManager] setPoolLimits idleMs error:', err);
     }
@@ -589,7 +589,7 @@ function AgentActiveManagerPane() {
               jsxs('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '4px' },
                 children: [
-                  Badge(`${runningCount} / ${maxBackends} 枠使用中`, isFull ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', isFull ? '#ef4444' : '#10b981'),
+                  Badge(`${runningCount} / ${maxBackends} Active`, isFull ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', isFull ? '#ef4444' : '#10b981'),
                   Btn({ onClick: () => handleChangeMaxBackends(1), variant: 'secondary', title: 'スロット枠を+1増やす', style: { padding: '2px 6px', fontSize: '10px' }, children: '+1' }),
                   maxBackends > 1 && Btn({ onClick: () => handleChangeMaxBackends(-1), variant: 'secondary', title: 'スロット枠を-1減らす', style: { padding: '2px 6px', fontSize: '10px' }, children: '-1' })
                 ]
@@ -612,7 +612,7 @@ function AgentActiveManagerPane() {
           jsxs('div', {
             style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: '#6b7280', marginTop: '4px' },
             children: [
-              jsx('span', { children: `自動解放: ${Math.round(poolLimits.idleMs / 60000)}分後に退避` }),
+              jsx('span', { children: `Idle Evict: ${Math.round(poolLimits.idleMs / 60000)}m` }),
               jsxs('div', {
                 style: { display: 'flex', gap: '4px' },
                 children: [120000, 300000, 600000].map((ms) => Btn({
@@ -620,7 +620,7 @@ function AgentActiveManagerPane() {
                   onClick: () => handleChangeIdleMs(ms),
                   variant: 'secondary',
                   style: { padding: '1px 5px', fontSize: '9px', fontWeight: poolLimits.idleMs === ms ? '700' : '400' },
-                  children: `${ms / 60000}分`
+                  children: `${ms / 60000}m`
                 }))
               })
             ]
@@ -651,15 +651,15 @@ function AgentActiveManagerPane() {
               jsxs('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '6px' },
                 children: [
-                  jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length}体 タスク実行中` : '全エージェント アイドル' }),
+                  jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length} Busy` : 'All Idle' }),
                   busyProfiles.length > 0 && Btn({
                     onClick: () => {
-                      for (const b of busyProfiles) markInferenceFinished(b, '手動でスタンバイへ復旧');
+                      for (const b of busyProfiles) markInferenceFinished(b, 'Reset');
                     },
                     variant: 'secondary',
                     style: { padding: '2px 6px', fontSize: '10px', color: '#4b5563' },
-                    title: 'すべてのエージェントの推論ステータスをスタンバイに戻します',
-                    children: '↺ スタンバイに戻す'
+                    title: 'すべてのエージェントの推論ステータスをリセット',
+                    children: '↺ Reset'
                   })
                 ]
               })
@@ -675,16 +675,16 @@ function AgentActiveManagerPane() {
               const isBusy = (cur && cur.status !== 'tool_completed') || Object.entries(sessionBotMap).some(([sid, b]) => b === name && busyBySession[sid]);
               const lastInf = lastInferenceMap[name];
 
-              let statusLabel = '待機中 (未起動)';
+              let statusLabel = 'Standby';
               let statusBg = 'rgba(156, 163, 175, 0.1)';
               let statusColor = '#6b7280';
 
               if (isBusy) {
-                statusLabel = cur?.toolName ? `⚡ ツール実行中 (${cur.toolName})` : '🧠 推論・生成中';
+                statusLabel = cur?.toolName ? `⚡ ${cur.toolName}` : '🧠 Busy';
                 statusBg = 'rgba(245, 158, 11, 0.15)';
                 statusColor = '#d97706';
               } else if (isRunning) {
-                statusLabel = '💤 アイドル (常駐中)';
+                statusLabel = '💤 Idle';
                 statusBg = 'rgba(16, 185, 129, 0.15)';
                 statusColor = '#10b981';
               }
@@ -708,7 +708,7 @@ function AgentActiveManagerPane() {
                         style: { display: 'flex', alignItems: 'center', gap: '6px' },
                         children: [
                           jsx('span', { style: { fontWeight: '700', fontSize: '12px' }, children: bot.display_name || name }),
-                          isFocused && Badge('表示中', 'rgba(79, 70, 229, 0.15)', '#4f46e5'),
+                          isFocused && Badge('Active', 'rgba(79, 70, 229, 0.15)', '#4f46e5'),
                           Badge(statusLabel, statusBg, statusColor)
                         ]
                       }),
@@ -716,17 +716,17 @@ function AgentActiveManagerPane() {
                         style: { display: 'flex', alignItems: 'center', gap: '4px' },
                         children: [
                           isBusy && Btn({
-                            onClick: () => markInferenceFinished(name, '手動でスタンバイへ復旧'),
+                            onClick: () => markInferenceFinished(name, 'Reset'),
                             variant: 'secondary',
                             style: { padding: '3px 6px', fontSize: '10px' },
-                            title: '推論ステータスをスタンバイへ戻す',
-                            children: '↺ スタンバイ'
+                            title: '推論ステータスをリセット',
+                            children: '↺ Reset'
                           }),
                           !isFocused && Btn({
                             disabled: isSwitching,
                             onClick: () => handleRequestSwitch(name),
                             variant: isRunning ? 'secondary' : 'primary',
-                            children: isRunning ? '開く' : '安全に切り替え ➔'
+                            children: isRunning ? 'Open' : 'Switch ➔'
                           })
                         ]
                       })
@@ -737,16 +737,16 @@ function AgentActiveManagerPane() {
                     children: [
                       jsx('span', {
                         children: isBusy
-                          ? '⏳ 現在リアルタイムでタスクを実行中'
+                          ? '⏳ Running task...'
                           : lastInf
-                            ? `⏱ 直前の推論: ${formatRelativeTime(lastInf.completedAt)}${lastInf.duration ? ` (${lastInf.duration}秒 / ${lastInf.summary})` : ` (${lastInf.summary})`}`
+                            ? `⏱ Last: ${formatRelativeTime(lastInf.completedAt)}${lastInf.duration ? ` (${lastInf.duration}s / ${lastInf.summary})` : ` (${lastInf.summary})`}`
                             : isRunning
-                              ? '⏱ 直前の推論: 履歴なし (スタンバイ)'
-                              : '⏱ 直前の推論: なし (未起動)'
+                              ? '⏱ Last: None (Idle)'
+                              : '⏱ Last: None (Standby)'
                       }),
                       isRunning && !isBusy && jsx('span', {
                         style: { color: isFocused ? '#6366f1' : '#059669', fontWeight: '600' },
-                        children: isFocused ? '常駐 (退避不可)' : '退避可能'
+                        children: isFocused ? 'Protected' : 'Evictable'
                       })
                     ]
                   })
@@ -792,7 +792,7 @@ function AgentActiveManagerPane() {
                       style: { display: 'flex', justifyContent: 'space-between', color: '#6b7280' },
                       children: [
                         jsx('span', { children: `・${bName}` }),
-                        jsx('span', { style: { color: '#d97706', fontWeight: '600' }, children: st?.toolName ? `ツール実行中 (${elapsed}s)` : `推論中 (${elapsed}s)` })
+                        jsx('span', { style: { color: '#d97706', fontWeight: '600' }, children: st?.toolName ? `Tool: ${st?.toolName} (${elapsed}s)` : `Thinking (${elapsed}s)` })
                       ]
                     });
                   })
@@ -806,19 +806,19 @@ function AgentActiveManagerPane() {
                   onClick: () => performSwitch(pendingSwitchTarget, { expandSlot: true }),
                   variant: 'primary',
                   style: { justifyContent: 'center', padding: '8px' },
-                  children: `一時的にスロットを+1拡張して安全に切り替える (${maxBackends} → ${maxBackends + 1})`
+                  children: `+1 Slot & Safe Switch (${maxBackends} → ${maxBackends + 1})`
                 }),
                 Btn({
                   onClick: () => performSwitch(pendingSwitchTarget, { expandSlot: false }),
                   variant: 'danger',
                   style: { justifyContent: 'center', padding: '6px', fontSize: '10.5px' },
-                  children: '強制的に切り替えを試みる（中断・タイムアウトのリスクあり）'
+                  children: 'Force Switch (Risk of Timeout)'
                 }),
                 Btn({
                   onClick: () => setPendingSwitchTarget(null),
                   variant: 'secondary',
                   style: { justifyContent: 'center', padding: '6px', marginTop: '4px' },
-                  children: 'キャンセル（現在の作業完了を待つ）'
+                  children: 'Cancel'
                 })
               ]
             })
