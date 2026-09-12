@@ -20,7 +20,7 @@ def register(ctx: Any) -> None:
     # 1. ツール登録 (toolset 引数は Hermes 公式仕様で必須)
     ctx.register_tool(
         name="run_wiki_skill_evolution",
-        toolset="wiki_skill_evolution",
+        toolset="wiki-skill-evolution",
         schema=RUN_EVOLUTION_SCHEMA,
         handler=plugin.handle_tool_call,
     )

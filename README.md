@@ -12,9 +12,8 @@ Hermes AI エージェント（[Hermes Agent](https://github.com/NousResearch/he
 | **[Agent Active Manager](./agent-active-manager/)** | Hermes Desktop | JS (ESM) | バックエンド同時起動スロット枠と推論状態を最適化し、プロファイル切替時のタイムアウトを防止 | [詳細 README](./agent-active-manager/README.md) |
 | **[Agent Activity Monitor](./agent-monitor/)** | Hermes Desktop | JS (ESM) | ボットの推論・ツール実行状態や Gateway イベントをリアルタイムに可視化・監視 | [詳細 README](./agent-monitor/README.md) |
 | **[Credential Safety](./credential-safety/)** | Hermes Agent | Python | ツール入出力・LLM推論・ターミナル出力から認証情報を自動マスクする多層防御。過去DB監査ツール同梱 | [詳細 README](./credential-safety/README.md) |
-| **[SQLite Memory](./sqlite_memory/)** | Hermes Agent / Desktop | Python / JS | ゼロ依存・SQLite FTS5による長期記憶＆自動想起。Web API および Desktop GUI（Unified Package）を同梱 | [詳細 README](./sqlite_memory/README.md) |
-| **[SQLite Memory GUI](./sqlite-memory-gui/)** | Hermes Desktop | JS (ESM) | SQLite 長期記憶の閲覧・検索・新規作成・編集・削除を行うマスター/ディテール GUI | [詳細 README](./sqlite-memory-gui/README.md) |
-| **[WikiSkill Evolution](./wiki_skill_evolution/)** | Hermes Agent | Python | ツール実行エラーを自動収集・分析し、教訓を Wiki ナレッジやスキル定義（`SKILL.md`）へ自律反映 | [詳細 README](./wiki_skill_evolution/README.md) |
+| **[SQLite Memory](./sqlite-memory/)** | Hermes Agent / Desktop | Python / JS | ゼロ依存・SQLite FTS5による長期記憶＆自動想起。Web API および Desktop GUI（Unified Package）を同梱 | [詳細 README](./sqlite-memory/README.md) |
+| **[WikiSkill Evolution](./wiki-skill-evolution/)** | Hermes Agent | Python | ツール実行エラーを自動収集・分析し、教訓を Wiki ナレッジやスキル定義（`SKILL.md`）へ自律反映 | [詳細 README](./wiki-skill-evolution/README.md) |
 
 ---
 
@@ -26,13 +25,12 @@ Hermes AI エージェント（[Hermes Agent](https://github.com/NousResearch/he
 hermes-plugin/
 ├── 【Hermes Desktop 向けプラグイン】（UI / JS）
 │   ├── agent-active-manager/  ──> ~/.hermes/desktop-plugins/agent-active-manager/
-│   ├── agent-monitor/         ──> ~/.hermes/desktop-plugins/agent-monitor/
-│   └── sqlite-memory-gui/     ──> ~/.hermes/desktop-plugins/sqlite_memory/
+│   └── agent-monitor/         ──> ~/.hermes/desktop-plugins/agent-monitor/
 │
 └── 【Hermes Agent 向けプラグイン】（Python）
     ├── credential-safety/     ──> ~/.hermes/plugins/credential-safety/
-    ├── sqlite_memory/         ──> ~/.hermes/plugins/sqlite_memory/ (※Desktop GUI同梱)
-    └── wiki_skill_evolution/  ──> ~/.hermes/plugins/wiki_skill_evolution/
+    ├── sqlite-memory/         ──> ~/.hermes/plugins/sqlite-memory/ (※Desktop GUI同梱)
+    └── wiki-skill-evolution/  ──> ~/.hermes/plugins/wiki-skill-evolution/
 ```
 
 ---
@@ -53,9 +51,6 @@ ln -s "$(pwd)/agent-active-manager" ~/.hermes/desktop-plugins/agent-active-manag
 
 # Agent Activity Monitor の配置
 ln -s "$(pwd)/agent-monitor" ~/.hermes/desktop-plugins/agent-monitor
-
-# SQLite Memory GUI の配置（※フォルダ名は sqlite_memory に指定）
-ln -s "$(pwd)/sqlite-memory-gui" ~/.hermes/desktop-plugins/sqlite_memory
 ```
 
 > [!TIP]
@@ -74,10 +69,10 @@ mkdir -p ~/.hermes/plugins
 ln -s "$(pwd)/credential-safety" ~/.hermes/plugins/credential-safety
 
 # SQLite Memory の配置（Unified Package: Desktop GUI も自動認識されます）
-ln -s "$(pwd)/sqlite_memory" ~/.hermes/plugins/sqlite_memory
+ln -s "$(pwd)/sqlite-memory" ~/.hermes/plugins/sqlite-memory
 
 # WikiSkill Evolution の配置
-ln -s "$(pwd)/wiki_skill_evolution" ~/.hermes/plugins/wiki_skill_evolution
+ln -s "$(pwd)/wiki-skill-evolution" ~/.hermes/plugins/wiki-skill-evolution
 ```
 
 #### プロファイル設定の有効化 (`config.yaml`)
@@ -88,13 +83,13 @@ ln -s "$(pwd)/wiki_skill_evolution" ~/.hermes/plugins/wiki_skill_evolution
 # プラグインの有効化
 plugins:
   - credential-safety
-  - wiki_skill_evolution
+  - wiki-skill-evolution
 
-# メモリプロバイダの設定（sqlite_memory を利用する場合）
+# メモリプロバイダの設定（sqlite-memory を利用する場合）
 memory:
   memory_enabled: true
-  provider: sqlite_memory
-  sqlite_memory:
+  provider: sqlite-memory
+  sqlite-memory:
     db_path: "~/.hermes/memory.db"
     auto_extract: true
     max_recall: 5
@@ -124,18 +119,14 @@ hermes-plugin/
 │   ├── tests/
 │   └── README.md
 │
-├── sqlite_memory/             # [Agent/Desktop] ゼロ依存 SQLite FTS5 永続メモリ
+├── sqlite-memory/             # [Agent/Desktop] ゼロ依存 SQLite FTS5 永続メモリ
 │   ├── __init__.py
 │   ├── plugin.yaml
 │   ├── dashboard/             # Webダッシュボード用定義
 │   ├── desktop/               # Desktop GUI (Unified Package)
 │   └── README.md
 │
-├── sqlite-memory-gui/         # [Desktop] SQLite メモリ管理 GUI（単体パッケージ）
-│   ├── plugin.js
-│   └── README.md
-│
-└── wiki_skill_evolution/      # [Agent] ツールエラー捕捉・スキル自律進化ループ
+└── wiki-skill-evolution/      # [Agent] ツールエラー捕捉・スキル自律進化ループ
     ├── main.py
     ├── plugin.yaml
     └── README.md

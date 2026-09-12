@@ -63,7 +63,7 @@ AI エージェントが日々のタスクを実行する中で遭遇するエ�
 ## 📁 ディレクトリ構成
 
 ```text
-wiki_skill_evolution/
+wiki-skill-evolution/
 ├── __init__.py      # プラグイン登録・エントリポイント
 ├── main.py          # 自律進化ロジック、エラー分析、スキルパッチ生成
 ├── plugin.yaml      # プラグインマニフェスト
@@ -82,10 +82,10 @@ Hermes Agent のプラグインディレクトリ `~/.hermes/plugins/` に配置
 mkdir -p ~/.hermes/plugins
 
 # コピーして配置する場合
-cp -r ./wiki_skill_evolution ~/.hermes/plugins/
+cp -r ./wiki-skill-evolution ~/.hermes/plugins/
 
 # またはシンボリックリンクで配置する場合（推奨）
-ln -s "$(pwd)/wiki_skill_evolution" ~/.hermes/plugins/wiki_skill_evolution
+ln -s "$(pwd)/wiki-skill-evolution" ~/.hermes/plugins/wiki-skill-evolution
 ```
 
 ### 2. プロファイルで有効化
@@ -94,7 +94,7 @@ ln -s "$(pwd)/wiki_skill_evolution" ~/.hermes/plugins/wiki_skill_evolution
 
 ```yaml
 plugins:
-  - wiki_skill_evolution
+  - wiki-skill-evolution
 ```
 
 ### 3. Hermes Agent の再起動
