@@ -144,11 +144,13 @@ hermes-plugin/
 │   ├── plugin.yaml
 │   ├── dashboard/             # Web dashboard integration
 │   ├── desktop/               # Desktop GUI (Unified Package)
+│   ├── tests/                 # Unit tests (FTS5 search, remember, forget)
 │   └── README.md
 │
 └── wiki-skill-evolution/      # [Agent] Tool error capture & skill evolution loop
     ├── main.py
     ├── plugin.yaml
+    ├── tests/                 # Unit tests (rules, patching, dry-run)
     └── README.md
 ```
 
@@ -157,8 +159,10 @@ hermes-plugin/
 ## 🧪 Testing & Validation
 
 ```bash
-# Run Credential Safety unit tests
+# Run all unit tests across all plugins
 python3 credential-safety/tests/test_credential_safety.py -v
+python3 sqlite-memory/tests/test_sqlite_memory.py -v
+python3 wiki-skill-evolution/tests/test_evolution.py -v
 
 # Run offline secret leak audit on databases and logs
 python3 credential-safety/scan_credentials.py
@@ -315,11 +319,13 @@ hermes-plugin/
 │   ├── plugin.yaml
 │   ├── dashboard/             # Webダッシュボード用定義
 │   ├── desktop/               # Desktop GUI (Unified Package)
+│   ├── tests/                 # ユニットテスト（FTS5想起・記憶・削除）
 │   └── README.md
 │
 └── wiki-skill-evolution/      # [Agent] ツールエラー捕捉・スキル自律進化ループ
     ├── main.py
     ├── plugin.yaml
+    ├── tests/                 # ユニットテスト（分類ルール・パッチ・ドライラン）
     └── README.md
 ```
 
@@ -328,8 +334,10 @@ hermes-plugin/
 ## 🧪 テスト・品質検証
 
 ```bash
-# Credential Safety のユニットテスト実行
+# 全プラグインのユニットテストを一括実行 (35テスト)
 python3 credential-safety/tests/test_credential_safety.py -v
+python3 sqlite-memory/tests/test_sqlite_memory.py -v
+python3 wiki-skill-evolution/tests/test_evolution.py -v
 
 # 過去の会話DB・ログの認証情報監査スキャン
 python3 credential-safety/scan_credentials.py
