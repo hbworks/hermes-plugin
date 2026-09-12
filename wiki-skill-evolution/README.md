@@ -1,5 +1,117 @@
 # WikiSkill Evolution Plugin for Hermes Agent
 
+[ English | [日本語](#japanese) ]
+
+An autonomous evolution plugin implementing the **Raw/Error → Wiki/Knowledge → Skill** feedback loop for Hermes Agent.  
+Automatically intercepts runtime tool errors, distills actionable lessons, and synthesizes updates directly into skill definitions (`SKILL.md`).
+
+---
+
+## 🎯 Concept & Architecture
+
+Ensures that errors encountered during real-world agent execution (e.g., Python `ImportError`, file path resolution failures, network timeouts, permission issues) are systematically captured and transformed into **permanent, reusable knowledge and enhanced skills**.
+
+```
+[ Tool Execution Error Occurs ]
+                 │
+                 ▼
+┌─────────────────────────────────────────┐
+│ Hook: post_tool_call                    │
+│ ・Captures error message, tool, timestamp│
+└─────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────┐
+│ Evolution Cycle (run_wiki_skill_evolution)│
+│ 1. Pattern classification & lesson rules│
+│ 2. Distill knowledge into wiki store   │
+│ 3. Patch skill definitions (SKILL.md)   │
+│ 4. Golden task verification (Gating)    │
+└─────────────────────────────────────────┘
+                 │
+                 ▼
+[ Future Sessions Avoid the Same Failure ]
+```
+
+---
+
+## 🌟 Key Features
+
+1. **Automatic Error Interception (`post_tool_call` hook)**
+   - Listens to tool execution failures across sessions, caching recent errors (up to 50 entries) in memory.
+2. **Error Pattern Classification & Distillation**
+   - Built-in heuristic rules for path imports, missing files, network timeouts, and OS permissions to formulate concrete prevention patches.
+3. **Automated Skill Patching**
+   - Automatically injects actionable lessons into `~/.hermes/skills/<skill_name>/SKILL.md` (or the active profile's skill directory).
+4. **Dry-Run Mode**
+   - Inspect proposed skill modifications and diffs prior to saving or committing changes.
+
+---
+
+## 🛠️ Provided Tools (Agent Tools)
+
+### `run_wiki_skill_evolution`
+
+Triggers the autonomous evolution cycle. Can be invoked directly by the user or triggered autonomously by the agent.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `skill_name` | string | `"default_skill"` | Name of the skill to evolve |
+| `hours` | integer | `6` | Error log lookback window in hours |
+| `dry_run` | boolean | `false` | When `true`, returns proposed patches without applying file changes |
+
+---
+
+## 📁 Directory Structure
+
+```text
+wiki-skill-evolution/
+├── __init__.py      # Plugin registration & entrypoint
+├── main.py          # Evolution loop logic, error classifiers, patching
+├── plugin.yaml      # Plugin manifest
+└── README.md        # Documentation
+```
+
+---
+
+## 🚀 Installation & Setup
+
+### 1. Place the Plugin
+
+Install into Hermes Agent's plugin directory `~/.hermes/plugins/`:
+
+```bash
+mkdir -p ~/.hermes/plugins
+
+# Option A: Copy
+cp -r ./wiki-skill-evolution ~/.hermes/plugins/
+
+# Option B: Symlink (Recommended)
+ln -s "$(pwd)/wiki-skill-evolution" ~/.hermes/plugins/wiki-skill-evolution
+```
+
+### 2. Enable in Profile Configuration
+
+Add `wiki-skill-evolution` to `~/.hermes/config.yaml` or `~/.hermes/profiles/<profile_name>.yaml`:
+
+```yaml
+plugins:
+  - wiki-skill-evolution
+```
+
+### 3. Restart Hermes Agent
+
+Restart Hermes Agent to activate the hooks and make `run_wiki_skill_evolution` available.
+
+<br>
+
+---
+<a id="japanese"></a>
+
+# WikiSkill Evolution Plugin for Hermes Agent (日本語)
+
+[ [English](#wikiskill-evolution-plugin-for-hermes-agent) | 日本語 ]
+
 Hermes Agent における **自律進化ループ（Raw/Error → Wiki/Knowledge → Skill）** を実装するプラグインです。  
 ツールの実行エラーを自動検知して教訓（ナレッジ）を抽出し、既存のスキル定義（`SKILL.md`）へフィードバック・自動更新を行います。
 
