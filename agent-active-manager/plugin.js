@@ -2,40 +2,7 @@ import { host, useValue, PANES_AREA, ROUTES_AREA } from '@hermes/plugin-sdk';
 import { jsx, jsxs } from 'react/jsx-runtime';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 
-// --- 1. ホバー先行起動（Hover-intent prewarm）タイマーの完全抑止 ---
-if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
-  window.__hermes_prewarm_blocked_v2 = true;
-
-  // 120msの先行起動タイマー（useProfilePrewarm）を直接フックして完全無効化
-  const originalSetTimeout = window.setTimeout;
-  window.setTimeout = function(fn, delay, ...args) {
-    if (typeof fn === 'function' && delay === 120) {
-      const fnStr = fn.toString();
-      if (fnStr.includes('prewarmProfileBackend') || fnStr.includes('startPrewarm')) {
-        return -1;
-      }
-    }
-    return originalSetTimeout.call(this, fn, delay, ...args);
-  };
-
-  const PREWARM_SEL = '[data-slot*="profile"],[data-tour*="profile"],aside,nav,[data-slot="sidebar"],[data-sidebar],[role="menu"],[role="menuitem"],[role="menuitemradio"],[data-radix-popper-content-wrapper],[data-radix-collection-item],[data-slot="session-row"],[data-roster-key],button[aria-label*="profile" i]';
-  const block = (e) => { if (e.target?.closest?.(PREWARM_SEL)) e.stopImmediatePropagation(); };
-  ['pointerenter', 'pointerover', 'mouseenter', 'mouseover'].forEach((t) => window.addEventListener(t, block, true));
-
-  // SDKウォームアップの無効化（最大10回試行で自動終了）
-  let tries = 0;
-  const timer = setInterval(() => {
-    const sdk = window.__HERMES_PLUGIN_SDK__;
-    if (sdk?.host) {
-      sdk.host.warmProfile = sdk.host.warmAgent = () => {};
-      clearInterval(timer);
-    } else if (++tries >= 10) {
-      clearInterval(timer);
-    }
-  }, 1000);
-}
-
-// --- 2. 共通ヘルパー関数 & 永続化 ---
+// --- 1. 共通ヘルパー関数 & 永続化 ---
 const LAST_INF_KEY = 'hermes_active_manager_last_inferences_v2';
 const loadStoredInferences = () => {
   try {
@@ -77,39 +44,59 @@ const formatRelativeTime = (ts) => {
 
 const getLocale = () => {
   if (typeof document !== 'undefined') {
-    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang')
-    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja'
+    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang');
+    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja';
   }
   if (typeof navigator !== 'undefined') {
-    const langs = navigator.languages || [navigator.language || navigator.userLanguage || '']
-    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
+    const langs = navigator.languages || [navigator.language || navigator.userLanguage || ''];
+    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja';
   }
-  return 'en'
-}
+  return 'en';
+};
 
 const I18N = {
   ja: {
     incSlot: 'スロット枠を+1増やす',
     decSlot: 'スロット枠を-1減らす',
-    resetAllTooltip: 'すべてのエージェントの推論ステータスをリセット',
-    resetSlotTooltip: '推論状態をリセットし、実行中のスロットを即時解放',
-    resetSlotNotif: (p) => `"${p}" の推論状態をリセットし、スロットを解放しました`,
+    slotUnavailable: 'Desktop内部API未接続のため、スロット数は固定（推定3枠）です',
+    resetAllTooltip: 'すべてのビジーエージェントの推論停止とステータスリセットを実行',
+    resetSlotTooltip: 'バックエンド推論を強制停止し、スロットを即時解放',
+    resetSlotNotif: (p) => `"${p}" の推論セッションを停止し、スロットを解放しました`,
+    resetSlotError: (p, msg) => `"${p}" のセッション停止に失敗しました: ${msg}`,
+    resetAllNotif: (count) => `${count} 件のビジーセッションを停止しました`,
     modalTitle: '全エージェントが作業・推論中です',
     modalDesc1: (max) => `現在起動中のすべてのスロット（${max}枠）でエージェントが推論やツールを実行しています。`,
     modalDesc2: 'このまま切り替えると、実行中のタスクが中断したり、スロット待ちでタイムアウト（エラー）になる可能性があります。',
     modalRunning: '現在実行中のエージェント:',
+    safeSwitchGuardTitle: '全枠ビジー安全ガード',
+    safeSwitchGuardDesc: '全スロット稼働時の切り替えタイムアウトを防止'
   },
   en: {
     incSlot: 'Increase slot limit (+1)',
     decSlot: 'Decrease slot limit (-1)',
-    resetAllTooltip: 'Reset inference status for all agents',
-    resetSlotTooltip: 'Reset inference state and immediately free running slot',
-    resetSlotNotif: (p) => `Reset inference state and released slot for "${p}"`,
+    slotUnavailable: 'Desktop internal API unavailable; slot limit is fixed (estimated: 3)',
+    resetAllTooltip: 'Stop backend inference and reset state for all busy agents',
+    resetSlotTooltip: 'Force stop backend inference and immediately free slot',
+    resetSlotNotif: (p) => `Stopped inference session and released slot for "${p}"`,
+    resetSlotError: (p, msg) => `Failed to stop session for "${p}": ${msg}`,
+    resetAllNotif: (count) => `Stopped ${count} busy session(s)`,
     modalTitle: 'All Agents Are Busy',
     modalDesc1: (max) => `All active slots (${max}) are currently busy with reasoning or tool execution.`,
     modalDesc2: 'Switching now may interrupt ongoing tasks or cause a timeout error while waiting for a free slot.',
     modalRunning: 'Currently running agents:',
+    safeSwitchGuardTitle: 'Safe Switch Guard',
+    safeSwitchGuardDesc: 'Prevents switch timeout when all slots are busy'
   }
+};
+
+/**
+ * 公式仕様に準拠した通知ヘルパー ({ kind, message })
+ */
+const sendNotification = (message, kind = 'info') => {
+  if (typeof host?.notify !== 'function') return;
+  try {
+    host.notify({ kind, message });
+  } catch (_) {}
 };
 
 const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
@@ -127,17 +114,37 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
   // 3. 最新Hermes公式の turn_author / author / sender を最優先で認識
   const author = ev.turn_author || ev.turnAuthor || p?.turn_author || p?.turnAuthor ||
                  ev.author || p?.author || ev.sender || p?.sender;
-  if (typeof author === 'string' && author.trim()) return author.trim().toLowerCase();
-  if (author?.profile || author?.name || author?.id) return (author.profile || author.name || author.id).trim().toLowerCase();
+  if (typeof author === 'string' && author.trim()) {
+    const prof = author.trim().toLowerCase();
+    if (sid) sMap[sid] = prof;
+    return prof;
+  }
+  if (author?.profile || author?.name || author?.id) {
+    const prof = (author.profile || author.name || author.id).trim().toLowerCase();
+    if (sid) sMap[sid] = prof;
+    return prof;
+  }
 
   // 4. ペイロード内の直接のボット指定（※ role は除外）
   const direct = ev.agent || ev.bot || ev.speaker ||
                  p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName;
-  if (typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
+  if (typeof direct === 'string' && direct.trim()) {
+    const prof = direct.trim().toLowerCase();
+    if (sid) sMap[sid] = prof;
+    return prof;
+  }
 
   // 5. from フィールド
-  if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
-  if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
+  if (typeof p?.from === 'string') {
+    const prof = p.from.trim().toLowerCase();
+    if (sid) sMap[sid] = prof;
+    return prof;
+  }
+  if (p?.from?.name || p?.from?.profile) {
+    const prof = (p.from.name || p.from.profile).trim().toLowerCase();
+    if (sid) sMap[sid] = prof;
+    return prof;
+  }
 
   // 6. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
   const evProf = (ev.profile || p?.profile || '').trim().toLowerCase();
@@ -146,6 +153,7 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
       if (sid) sMap[sid] = focusedProfile;
       return focusedProfile;
     }
+    if (sid) sMap[sid] = evProf;
     return evProf;
   }
 
@@ -158,18 +166,77 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
   return '';
 };
 
-// --- 3. UI スタイル & 共通コンポーネント ---
+// --- 2. UI スタイル（Hermes 公式 CSS 変数 / Design Tokens 準拠） ---
 const S = {
-  container: { display: 'flex', flexDirection: 'column', height: '100%', width: '100%', boxSizing: 'border-box', background: 'transparent', color: 'inherit', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', fontSize: '12px', overflowY: 'auto', overflowX: 'hidden', padding: '12px' },
-  card: { background: 'rgba(0, 0, 0, 0.03)', borderRadius: '10px', border: '1px solid rgba(0, 0, 0, 0.08)', padding: '12px', marginBottom: '12px' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' },
-  title: { fontSize: '12px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: '#6366f1', display: 'flex', alignItems: 'center', gap: '6px' },
-  modalBackdrop: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: '20px' },
-  modal: { background: '#ffffff', color: '#1f2937', borderRadius: '12px', padding: '18px 20px', maxWidth: '420px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)', border: '1px solid rgba(0, 0, 0, 0.1)' }
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    width: '100%',
+    boxSizing: 'border-box',
+    background: 'transparent',
+    color: 'var(--ui-text, inherit)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    fontSize: '12px',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    padding: '12px'
+  },
+  card: {
+    background: 'var(--ui-card-bg, rgba(127, 127, 127, 0.05))',
+    borderRadius: '10px',
+    border: '1px solid var(--ui-border, rgba(127, 127, 127, 0.15))',
+    padding: '12px',
+    marginBottom: '12px'
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: '10px'
+  },
+  title: {
+    fontSize: '12px',
+    fontWeight: '700',
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+    color: 'var(--ui-primary, #6366f1)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px'
+  },
+  modalBackdrop: {
+    position: 'fixed',
+    inset: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    backdropFilter: 'blur(3px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 99999,
+    padding: '20px'
+  },
+  modal: {
+    background: 'var(--ui-modal-bg, var(--ui-card-bg, #ffffff))',
+    color: 'var(--ui-text, #1f2937)',
+    borderRadius: '12px',
+    padding: '18px 20px',
+    maxWidth: '420px',
+    width: '100%',
+    boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)',
+    border: '1px solid var(--ui-border, rgba(127, 127, 127, 0.2))'
+  }
 };
 
 const Badge = (children, bg, color) => jsx('span', {
-  style: { fontSize: '10px', fontWeight: '600', padding: '2px 6px', borderRadius: '4px', background: bg, color },
+  style: {
+    fontSize: '10px',
+    fontWeight: '600',
+    padding: '2px 6px',
+    borderRadius: '4px',
+    background: bg,
+    color
+  },
   children
 });
 
@@ -181,8 +248,12 @@ const Btn = ({ onClick, children, variant = 'primary', disabled = false, style =
     disabled,
     title,
     style: {
-      background: isDanger ? '#ef4444' : isPrimary ? '#4f46e5' : 'rgba(0, 0, 0, 0.06)',
-      color: isPrimary || isDanger ? '#ffffff' : 'inherit',
+      background: isDanger
+        ? 'var(--ui-danger, #ef4444)'
+        : isPrimary
+          ? 'var(--ui-primary, #4f46e5)'
+          : 'var(--ui-btn-secondary-bg, rgba(127, 127, 127, 0.12))',
+      color: isPrimary || isDanger ? '#ffffff' : 'var(--ui-text, inherit)',
       border: 'none',
       borderRadius: '6px',
       padding: '5px 10px',
@@ -192,7 +263,8 @@ const Btn = ({ onClick, children, variant = 'primary', disabled = false, style =
       display: 'inline-flex',
       alignItems: 'center',
       gap: '4px',
-      opacity: disabled ? 0.6 : 1,
+      opacity: disabled ? 0.45 : 1,
+      transition: 'opacity 0.2s ease, background-color 0.2s ease',
       ...style
     },
     children
@@ -210,6 +282,7 @@ function AgentActiveManagerPane() {
   const focusedSessionId = useValue(focusedSidAtom) || '';
   const t = I18N[getLocale()] || I18N.en;
 
+  const hasDesktopPoolControl = typeof window !== 'undefined' && Boolean(window.hermesDesktop?.setPoolLimits);
   const [poolLimits, setPoolLimits] = useState({ maxBackends: 3, idleMs: 600000 });
   const [roster, setRoster] = useState([]);
   const [sessionBotMap, setSessionBotMap] = useState({});
@@ -229,11 +302,20 @@ function AgentActiveManagerPane() {
   const focusedSidRef = useRef(focusedSessionId);
   focusedSidRef.current = focusedSessionId;
 
-  // プール制限設定の読み込み
+  // 一時スロット拡張のイベント駆動型クリーンアップ用参照
+  const pendingRevertMaxRef = useRef(null);
+
+  // プール制限設定の読み込み（未公開API存在時のみ連携し、非存在時はフォールバック）
   const fetchPoolLimits = async () => {
+    if (!hasDesktopPoolControl) return;
     try {
       const limits = await window.hermesDesktop?.getPoolLimits?.();
-      if (typeof limits?.maxBackends === 'number') setPoolLimits(limits);
+      if (typeof limits?.maxBackends === 'number') {
+        setPoolLimits((prev) => ({
+          maxBackends: limits.maxBackends,
+          idleMs: typeof limits.idleMs === 'number' ? limits.idleMs : prev.idleMs
+        }));
+      }
     } catch (err) {
       console.debug('[AgentActiveManager] getPoolLimits error:', err);
     }
@@ -241,16 +323,20 @@ function AgentActiveManagerPane() {
 
   useEffect(() => {
     fetchPoolLimits();
-    const interval = setInterval(fetchPoolLimits, 4000);
-    return () => clearInterval(interval);
-  }, []);
+    if (hasDesktopPoolControl) {
+      const interval = setInterval(fetchPoolLimits, 4000);
+      return () => clearInterval(interval);
+    }
+  }, [hasDesktopPoolControl]);
 
-  // プロファイル一覧とセッション情報の同期
+  // プロファイル一覧と「ランタイムセッション情報（sessions.list）」の同期
   useEffect(() => {
     let isMounted = true;
     const syncRoster = async () => {
       try {
         if (typeof host?.request !== 'function') return;
+
+        // 1. プロファイル一覧を取得
         const res = await host.request('profiles.list', {});
         const profiles = Array.isArray(res?.profiles) ? res.profiles : [];
         if (!isMounted) return;
@@ -266,11 +352,32 @@ function AgentActiveManagerPane() {
         rosterRef.current = sorted;
 
         const mapUpdate = {};
+
+        // 2. ランタイムセッション一覧（sessions.list）から正確な sessionId -> profile マッピングを取得
+        try {
+          const sessRes = await host.request('sessions.list', {}).catch(() => null);
+          const activeSessions = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
+          for (const s of activeSessions) {
+            const sId = s.id || s.sessionId || s.session_id;
+            const sProf = s.profile || s.profileName || s.agent;
+            if (sId && sProf) {
+              mapUpdate[sId] = String(sProf).toLowerCase();
+            }
+          }
+        } catch (_) {}
+
+        // 3. 現在フォーカス中のセッションIDも最優先でマッピング
+        if (focusedSidRef.current && focusedProfileRef.current) {
+          mapUpdate[focusedSidRef.current] = focusedProfileRef.current;
+        }
+
+        // 4. canonical_session / last_session からの補完マッピング
         for (const p of sorted) {
           const cs = p.canonical_session || p.last_session;
           const csId = cs?.resolved_id || cs?.id;
-          if (csId) mapUpdate[csId] = p.name;
+          if (csId && !mapUpdate[csId]) mapUpdate[csId] = p.name;
         }
+
         sessionBotMapRef.current = { ...sessionBotMapRef.current, ...mapUpdate };
         setSessionBotMap((prev) => ({ ...prev, ...mapUpdate }));
 
@@ -301,7 +408,7 @@ function AgentActiveManagerPane() {
     };
 
     syncRoster();
-    const interval = setInterval(syncRoster, 8000);
+    const interval = setInterval(syncRoster, 4000);
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
@@ -316,8 +423,8 @@ function AgentActiveManagerPane() {
       const nextMap = {
         ...prevMap,
         [targetProfile]: {
-          completedAt: now,
-          duration: duration || prevMap[targetProfile]?.duration || 1,
+          completedAt: new Date(now).toISOString(),
+          duration,
           summary: prev?.toolName ? `Tool: ${prev.toolName}` : reason
         }
       };
@@ -325,26 +432,77 @@ function AgentActiveManagerPane() {
       return nextMap;
     });
 
-    delete agentStatusRef.current[targetProfile];
     setAgentStatus((prev) => {
-      if (!prev[targetProfile]) return prev;
       const next = { ...prev };
       delete next[targetProfile];
+      agentStatusRef.current = next;
       return next;
     });
   };
 
-  // 推論状態のリセット & スロット強制解放（最新Hermesの世代管理・中断機能と連動）
+  // 個別推論状態のリセット & スロット強制解放（関連するすべてのランタイムsessionIdを明示してバックエンド停止を実行）
   const handleResetInference = async (targetProfile) => {
-    markInferenceFinished(targetProfile, 'Reset');
     try {
-      if (typeof host?.requestProfile === 'function') {
-        await host.requestProfile(targetProfile, 'session.stop', {}).catch(() => {});
-      } else if (typeof host?.request === 'function') {
-        await host.request('session.stop', { profile: targetProfile }).catch(() => {});
+      // 該当プロファイルのアクティブなランタイム sessionId をすべて特定
+      const activeSids = Object.entries(sessionBotMapRef.current)
+        .filter(([_, bot]) => bot === targetProfile)
+        .map(([sid]) => sid);
+
+      if (focusedProfileRef.current === targetProfile && focusedSidRef.current && !activeSids.includes(focusedSidRef.current)) {
+        activeSids.push(focusedSidRef.current);
       }
-      host?.notify?.(I18N[getLocale()]?.resetSlotNotif?.(targetProfile) || `Reset inference state and released slot for "${targetProfile}"`);
-    } catch (_) {}
+
+      const stopPromises = [];
+      if (activeSids.length > 0) {
+        for (const sid of activeSids) {
+          const stopPayload = {
+            profile: targetProfile,
+            sessionId: sid,
+            session_id: sid,
+            abort: true
+          };
+          if (typeof host?.requestProfile === 'function') {
+            stopPromises.push(host.requestProfile(targetProfile, 'session.stop', stopPayload));
+          } else if (typeof host?.request === 'function') {
+            stopPromises.push(host.request('session.stop', stopPayload));
+          }
+        }
+      } else {
+        const stopPayload = { profile: targetProfile, abort: true };
+        if (typeof host?.requestProfile === 'function') {
+          stopPromises.push(host.requestProfile(targetProfile, 'session.stop', stopPayload));
+        } else if (typeof host?.request === 'function') {
+          stopPromises.push(host.request('session.stop', stopPayload));
+        }
+      }
+
+      const results = await Promise.allSettled(stopPromises);
+      const allFailed = stopPromises.length > 0 && results.every((r) => r.status === 'rejected');
+      if (allFailed) {
+        const firstErr = results.find((r) => r.status === 'rejected')?.reason;
+        const errMsg = firstErr?.message || String(firstErr || 'Failed to stop backend session');
+        sendNotification(t.resetSlotError(targetProfile, errMsg), 'error');
+        return;
+      }
+
+      markInferenceFinished(targetProfile, 'Reset');
+      sendNotification(t.resetSlotNotif(targetProfile), 'success');
+    } catch (err) {
+      console.error('[AgentActiveManager] Reset session error:', err);
+      sendNotification(t.resetSlotError(targetProfile, err?.message || 'Error stopping session'), 'error');
+    }
+  };
+
+  // 全体リセット（すべてのビジープロファイルのバックエンドセッション停止を並行実行）
+  const handleResetAllBusy = async () => {
+    const targets = [...busyProfiles];
+    if (targets.length === 0) return;
+    try {
+      await Promise.allSettled(targets.map((b) => handleResetInference(b)));
+      sendNotification(t.resetAllNotif(targets.length), 'info');
+    } catch (err) {
+      console.error('[AgentActiveManager] handleResetAllBusy error:', err);
+    }
   };
 
   // Gatewayイベントの監視（推論状態と直前推論履歴）
@@ -376,6 +534,14 @@ function AgentActiveManagerPane() {
 
       if (!rawProfile) return;
 
+      const sid = event.sessionId || event.session_id || event.session || event.sid || payload?.sessionId || payload?.session_id;
+      if (sid && rawProfile) {
+        if (sessionBotMapRef.current[sid] !== rawProfile) {
+          sessionBotMapRef.current[sid] = rawProfile;
+          setSessionBotMap((prev) => ({ ...prev, [sid]: rawProfile }));
+        }
+      }
+
       const now = Date.now();
 
       // 完了・終了シグナルの総合判定
@@ -404,7 +570,7 @@ function AgentActiveManagerPane() {
       // 思考中
       const isThinking = !isFinished && !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning || payload?.thought));
 
-      // ストリーム生成中（単なる完了メッセージ通知やpayload.textで誤検知しないようストリーム/差分に限定）
+      // ストリーム生成中
       const isDelta = matchAny(eventType, ['delta', 'stream', 'chunk']) || Boolean(payload?.delta);
       const isGenerating = !isFinished && !isToolCall && !isToolResult && !isThinking && (
         isDelta ||
@@ -451,7 +617,7 @@ function AgentActiveManagerPane() {
         const lastActive = st.lastActive || lastActiveRef.current[name] || 0;
         const idleFor = now - lastActive;
 
-        // 該当プロファイルに紐づくセッションの busyBySession 状態を判定
+        // 該当プロファイルに紐づくランタイムセッションの busyBySession 状態を判定
         const isSessionBusy = Object.entries(sessionBotMapRef.current).some(([sid, bot]) => bot === name && busyBySession[sid]);
 
         // 判定条件1: tool_completed 状態が 3秒以上経過したら完了
@@ -514,13 +680,27 @@ function AgentActiveManagerPane() {
     return () => clearInterval(timer);
   }, [focusedProfileName, poolLimits.idleMs]);
 
-  // フォーカス中プロファイルは常に稼働セットに維持
+  // フォーカス中プロファイルは常に稼働セットに維持 ＆ スロット拡張の復元検知
   useEffect(() => {
     if (focusedProfileName) {
       lastActiveRef.current[focusedProfileName] = Date.now();
       setRunningProfiles((prev) => new Set([...prev, focusedProfileName]));
+
+      // 一時スロット拡張のイベント駆動型復元: 目的のプロファイルに切り替わったら上限を元に戻す
+      if (pendingRevertMaxRef.current !== null) {
+        const orig = pendingRevertMaxRef.current;
+        pendingRevertMaxRef.current = null;
+        setTimeout(async () => {
+          if (hasDesktopPoolControl && window.hermesDesktop?.setPoolLimits) {
+            try {
+              await window.hermesDesktop.setPoolLimits({ maxBackends: orig });
+              setPoolLimits((prev) => ({ ...prev, maxBackends: orig }));
+            } catch (_) {}
+          }
+        }, 1500);
+      }
     }
-  }, [focusedProfileName]);
+  }, [focusedProfileName, hasDesktopPoolControl]);
 
   const runningList = useMemo(() => Array.from(runningProfiles), [runningProfiles]);
   const busyProfiles = useMemo(() => {
@@ -544,14 +724,25 @@ function AgentActiveManagerPane() {
     const originalMax = maxBackends;
 
     try {
-      if (!runningProfiles.has(targetBot) || options.expandSlot) {
-        if (window.hermesDesktop?.setPoolLimits) {
-          const newMax = Math.max(maxBackends + 1, runningCount + 1);
-          setSwitchFeedback(`Expanding slot (${maxBackends} → ${newMax})...`);
-          await window.hermesDesktop.setPoolLimits({ maxBackends: newMax });
-          setPoolLimits((prev) => ({ ...prev, maxBackends: newMax }));
-          await new Promise((r) => setTimeout(r, 100));
-        }
+      if (options.expandSlot && hasDesktopPoolControl && window.hermesDesktop?.setPoolLimits) {
+        const newMax = Math.max(maxBackends + 1, runningCount + 1);
+        setSwitchFeedback(`Expanding slot (${maxBackends} → ${newMax})...`);
+        await window.hermesDesktop.setPoolLimits({ maxBackends: newMax });
+        setPoolLimits((prev) => ({ ...prev, maxBackends: newMax }));
+        pendingRevertMaxRef.current = originalMax;
+
+        // セーフティガード（最大30秒後に自動復元）
+        setTimeout(async () => {
+          if (pendingRevertMaxRef.current === originalMax) {
+            pendingRevertMaxRef.current = null;
+            try {
+              await window.hermesDesktop?.setPoolLimits?.({ maxBackends: originalMax });
+              setPoolLimits((prev) => ({ ...prev, maxBackends: originalMax }));
+            } catch (_) {}
+          }
+        }, 30000);
+
+        await new Promise((r) => setTimeout(r, 100));
       }
 
       const matched = (rosterRef.current || []).find((p) => p.name === targetBot);
@@ -566,8 +757,10 @@ function AgentActiveManagerPane() {
         targetSessionId = createRes?.session?.id || createRes?.id;
       }
 
+      // 公式仕様: host.ensureAgent(connectionId, profile) - 単一接続時は null でデフォルト接続を使用
+      await host?.ensureAgent?.(null, targetBot).catch(() => {});
+
       if (targetSessionId) {
-        await host?.ensureAgent?.(targetSessionId, targetBot).catch(() => {});
         if (typeof host?.openSession === 'function') {
           await host.openSession(targetSessionId, { profile: targetBot, awaitHydration: false }).catch(() => null);
         } else if (typeof host?.switchSession === 'function') {
@@ -578,7 +771,6 @@ function AgentActiveManagerPane() {
           window.location.hash = `#/${targetSessionId}`;
         }
       } else {
-        await host?.ensureAgent?.(null, targetBot).catch(() => {});
         host?.navigate?.('/');
       }
 
@@ -593,15 +785,6 @@ function AgentActiveManagerPane() {
     } finally {
       setIsSwitching(false);
       setPendingSwitchTarget(null);
-
-      if (originalMax && window.hermesDesktop?.setPoolLimits) {
-        setTimeout(async () => {
-          try {
-            await window.hermesDesktop.setPoolLimits({ maxBackends: originalMax });
-            setPoolLimits((prev) => ({ ...prev, maxBackends: originalMax }));
-          } catch (_) {}
-        }, 8000);
-      }
     }
   };
 
@@ -615,16 +798,18 @@ function AgentActiveManagerPane() {
   };
 
   const handleChangeIdleMs = async (ms) => {
+    if (!hasDesktopPoolControl) return;
     try {
       await window.hermesDesktop?.setPoolLimits?.({ idleMs: ms });
       setPoolLimits((prev) => ({ ...prev, idleMs: ms }));
-      host?.notify?.(`Idle timeout set to ${Math.round(ms / 60000)}m`);
+      sendNotification(`Idle timeout set to ${Math.round(ms / 60000)}m`, 'info');
     } catch (err) {
       console.error('[AgentActiveManager] setPoolLimits idleMs error:', err);
     }
   };
 
   const handleChangeMaxBackends = async (delta) => {
+    if (!hasDesktopPoolControl) return;
     const nextVal = Math.max(1, Math.min(16, maxBackends + delta));
     try {
       await window.hermesDesktop?.setPoolLimits?.({ maxBackends: nextVal });
@@ -644,32 +829,68 @@ function AgentActiveManagerPane() {
           jsxs('div', {
             style: S.header,
             children: [
-              jsxs('div', { style: S.title, children: [jsx('span', { children: '⚡' }), jsx('span', { children: 'BACKEND SLOT POOL' })] }),
+              jsxs('div', {
+                style: S.title,
+                children: [jsx('span', { children: '⚡' }), jsx('span', { children: 'BACKEND SLOT POOL' })]
+              }),
               jsxs('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '4px' },
                 children: [
-                  Badge(`${runningCount} / ${maxBackends} Active`, isFull ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', isFull ? '#ef4444' : '#10b981'),
-                  Btn({ onClick: () => handleChangeMaxBackends(1), variant: 'secondary', title: t.incSlot, style: { padding: '2px 6px', fontSize: '10px' }, children: '+1' }),
-                  maxBackends > 1 && Btn({ onClick: () => handleChangeMaxBackends(-1), variant: 'secondary', title: t.decSlot, style: { padding: '2px 6px', fontSize: '10px' }, children: '-1' })
+                  Badge(
+                    `${runningCount} / ${maxBackends} Active`,
+                    isFull ? 'var(--ui-badge-danger-bg, rgba(239, 68, 68, 0.15))' : 'var(--ui-badge-success-bg, rgba(16, 185, 129, 0.15))',
+                    isFull ? 'var(--ui-danger, #ef4444)' : 'var(--ui-success, #10b981)'
+                  ),
+                  Btn({
+                    onClick: () => handleChangeMaxBackends(1),
+                    variant: 'secondary',
+                    disabled: !hasDesktopPoolControl,
+                    title: hasDesktopPoolControl ? t.incSlot : t.slotUnavailable,
+                    style: { padding: '2px 6px', fontSize: '10px' },
+                    children: '+1'
+                  }),
+                  maxBackends > 1 && Btn({
+                    onClick: () => handleChangeMaxBackends(-1),
+                    variant: 'secondary',
+                    disabled: !hasDesktopPoolControl,
+                    title: hasDesktopPoolControl ? t.decSlot : t.slotUnavailable,
+                    style: { padding: '2px 6px', fontSize: '10px' },
+                    children: '-1'
+                  })
                 ]
               })
             ]
           }),
           // プログレスバー
           jsx('div', {
-            style: { width: '100%', height: '6px', borderRadius: '3px', backgroundColor: 'rgba(0, 0, 0, 0.08)', overflow: 'hidden', marginTop: '6px', marginBottom: '8px' },
+            style: {
+              width: '100%',
+              height: '6px',
+              borderRadius: '3px',
+              backgroundColor: 'var(--ui-progress-bg, rgba(127, 127, 127, 0.15))',
+              overflow: 'hidden',
+              marginTop: '6px',
+              marginBottom: '8px'
+            },
             children: jsx('div', {
               style: {
                 width: `${Math.min(100, Math.max(0, usagePct))}%`,
                 height: '100%',
-                backgroundColor: isFull ? '#ef4444' : usagePct > 66 ? '#f59e0b' : '#10b981',
+                backgroundColor: isFull ? 'var(--ui-danger, #ef4444)' : usagePct > 66 ? 'var(--ui-warning, #f59e0b)' : 'var(--ui-success, #10b981)',
                 transition: 'width 0.3s ease, background-color 0.3s ease'
               }
             })
           }),
           // アイドル時間調整
           jsxs('div', {
-            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: '#6b7280', marginTop: '4px' },
+            style: {
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '11px',
+              color: 'var(--ui-muted, #888888)',
+              marginTop: '4px'
+            },
             children: [
               jsx('span', { children: `Idle Evict: ${Math.round(poolLimits.idleMs / 60000)}m` }),
               jsxs('div', {
@@ -678,6 +899,8 @@ function AgentActiveManagerPane() {
                   key: ms,
                   onClick: () => handleChangeIdleMs(ms),
                   variant: 'secondary',
+                  disabled: !hasDesktopPoolControl,
+                  title: hasDesktopPoolControl ? undefined : t.slotUnavailable,
                   style: { padding: '1px 5px', fontSize: '9px', fontWeight: poolLimits.idleMs === ms ? '700' : '400' },
                   children: `${ms / 60000}m`
                 }))
@@ -689,8 +912,8 @@ function AgentActiveManagerPane() {
               marginTop: '8px',
               padding: '6px 8px',
               borderRadius: '6px',
-              backgroundColor: switchFeedback.includes('❌') ? 'rgba(239, 68, 68, 0.1)' : 'rgba(79, 70, 229, 0.1)',
-              color: switchFeedback.includes('❌') ? '#ef4444' : '#4f46e5',
+              backgroundColor: switchFeedback.includes('❌') ? 'var(--ui-badge-danger-bg, rgba(239, 68, 68, 0.12))' : 'var(--ui-badge-primary-bg, rgba(99, 102, 241, 0.12))',
+              color: switchFeedback.includes('❌') ? 'var(--ui-danger, #ef4444)' : 'var(--ui-primary, #4f46e5)',
               fontSize: '11px',
               fontWeight: '600'
             },
@@ -706,19 +929,23 @@ function AgentActiveManagerPane() {
           jsxs('div', {
             style: S.header,
             children: [
-              jsxs('div', { style: { ...S.title, color: '#374151' }, children: [jsx('span', { children: '🤖' }), jsx('span', { children: 'AGENTS & INFERENCE STATE' })] }),
+              jsxs('div', {
+                style: { ...S.title, color: 'var(--ui-text, inherit)' },
+                children: [jsx('span', { children: '🤖' }), jsx('span', { children: 'AGENTS & INFERENCE STATE' })]
+              }),
               jsxs('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '6px' },
                 children: [
-                  jsx('span', { style: { fontSize: '10px', color: '#9ca3af' }, children: busyProfiles.length > 0 ? `${busyProfiles.length} Busy` : 'All Idle' }),
+                  jsx('span', {
+                    style: { fontSize: '10px', color: 'var(--ui-muted, #888888)' },
+                    children: busyProfiles.length > 0 ? `${busyProfiles.length} Busy` : 'All Idle'
+                  }),
                   busyProfiles.length > 0 && Btn({
-                    onClick: () => {
-                      for (const b of busyProfiles) markInferenceFinished(b, 'Reset');
-                    },
+                    onClick: handleResetAllBusy,
                     variant: 'secondary',
-                    style: { padding: '2px 6px', fontSize: '10px', color: '#4b5563' },
+                    style: { padding: '2px 6px', fontSize: '10px' },
                     title: t.resetAllTooltip,
-                    children: '↺ Reset'
+                    children: '↺ Reset All'
                   })
                 ]
               })
@@ -735,17 +962,17 @@ function AgentActiveManagerPane() {
               const lastInf = lastInferenceMap[name];
 
               let statusLabel = 'Standby';
-              let statusBg = 'rgba(156, 163, 175, 0.1)';
-              let statusColor = '#6b7280';
+              let statusBg = 'var(--ui-badge-muted-bg, rgba(127, 127, 127, 0.12))';
+              let statusColor = 'var(--ui-muted, #888888)';
 
               if (isBusy) {
                 statusLabel = cur?.toolName ? `⚡ ${cur.toolName}` : '🧠 Busy';
-                statusBg = 'rgba(245, 158, 11, 0.15)';
-                statusColor = '#d97706';
+                statusBg = 'var(--ui-badge-warning-bg, rgba(245, 158, 11, 0.15))';
+                statusColor = 'var(--ui-warning, #d97706)';
               } else if (isRunning) {
                 statusLabel = '💤 Idle';
-                statusBg = 'rgba(16, 185, 129, 0.15)';
-                statusColor = '#10b981';
+                statusBg = 'var(--ui-badge-success-bg, rgba(16, 185, 129, 0.15))';
+                statusColor = 'var(--ui-success, #10b981)';
               }
 
               return jsxs('div', {
@@ -753,8 +980,8 @@ function AgentActiveManagerPane() {
                 style: {
                   padding: '9px 10px',
                   borderRadius: '8px',
-                  backgroundColor: isFocused ? 'rgba(79, 70, 229, 0.06)' : 'rgba(0, 0, 0, 0.02)',
-                  border: isFocused ? '1px solid rgba(79, 70, 229, 0.3)' : '1px solid rgba(0, 0, 0, 0.05)',
+                  backgroundColor: isFocused ? 'var(--ui-card-active-bg, rgba(99, 102, 241, 0.08))' : 'var(--ui-card-item-bg, rgba(127, 127, 127, 0.04))',
+                  border: isFocused ? '1px solid var(--ui-primary, rgba(99, 102, 241, 0.4))' : '1px solid var(--ui-border, rgba(127, 127, 127, 0.1))',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '5px'
@@ -767,7 +994,7 @@ function AgentActiveManagerPane() {
                         style: { display: 'flex', alignItems: 'center', gap: '6px' },
                         children: [
                           jsx('span', { style: { fontWeight: '700', fontSize: '12px' }, children: bot.display_name || name }),
-                          isFocused && Badge('Active', 'rgba(79, 70, 229, 0.15)', '#4f46e5'),
+                          isFocused && Badge('Active', 'var(--ui-badge-primary-bg, rgba(99, 102, 241, 0.15))', 'var(--ui-primary, #4f46e5)'),
                           Badge(statusLabel, statusBg, statusColor)
                         ]
                       }),
@@ -792,7 +1019,7 @@ function AgentActiveManagerPane() {
                     ]
                   }),
                   jsxs('div', {
-                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10.5px', color: '#6b7280', marginTop: '1px' },
+                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10.5px', color: 'var(--ui-muted, #888888)', marginTop: '1px' },
                     children: [
                       jsx('span', {
                         children: isBusy
@@ -804,7 +1031,7 @@ function AgentActiveManagerPane() {
                               : '⏱ Last: None (Standby)'
                       }),
                       isRunning && !isBusy && jsx('span', {
-                        style: { color: isFocused ? '#6366f1' : '#059669', fontWeight: '600' },
+                        style: { color: isFocused ? 'var(--ui-primary, #6366f1)' : 'var(--ui-success, #059669)', fontWeight: '600' },
                         children: isFocused ? 'Protected' : 'Evictable'
                       })
                     ]
@@ -826,11 +1053,11 @@ function AgentActiveManagerPane() {
               style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' },
               children: [
                 jsx('span', { style: { fontSize: '20px' }, children: '⚠️' }),
-                jsx('h3', { style: { margin: 0, fontSize: '14px', fontWeight: '700', color: '#b45309' }, children: t.modalTitle })
+                jsx('h3', { style: { margin: 0, fontSize: '14px', fontWeight: '700', color: 'var(--ui-warning, #b45309)' }, children: t.modalTitle })
               ]
             }),
             jsxs('p', {
-              style: { fontSize: '12px', lineHeight: '1.5', color: '#4b5563', margin: '0 0 12px 0' },
+              style: { fontSize: '12px', lineHeight: '1.5', color: 'var(--ui-text, inherit)', opacity: 0.85, margin: '0 0 12px 0' },
               children: [
                 t.modalDesc1(maxBackends),
                 jsx('br', {}),
@@ -838,20 +1065,20 @@ function AgentActiveManagerPane() {
               ]
             }),
             jsx('div', {
-              style: { backgroundColor: 'rgba(0, 0, 0, 0.04)', borderRadius: '6px', padding: '8px 10px', marginBottom: '14px' },
+              style: { backgroundColor: 'var(--ui-card-item-bg, rgba(127, 127, 127, 0.08))', borderRadius: '6px', padding: '8px 10px', marginBottom: '14px' },
               children: jsxs('div', {
                 style: { fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '4px' },
                 children: [
-                  jsx('span', { style: { fontWeight: '600', color: '#374151' }, children: t.modalRunning }),
+                  jsx('span', { style: { fontWeight: '600', color: 'var(--ui-text, inherit)' }, children: t.modalRunning }),
                   busyProfiles.map((bName) => {
                     const st = agentStatus[bName];
                     const elapsed = st?.start ? Math.max(1, Math.round((Date.now() - st.start) / 1000)) : 0;
                     return jsxs('div', {
                       key: bName,
-                      style: { display: 'flex', justifyContent: 'space-between', color: '#6b7280' },
+                      style: { display: 'flex', justifyContent: 'space-between', color: 'var(--ui-muted, #888888)' },
                       children: [
                         jsx('span', { children: `・${bName}` }),
-                        jsx('span', { style: { color: '#d97706', fontWeight: '600' }, children: st?.toolName ? `Tool: ${st?.toolName} (${elapsed}s)` : `Thinking (${elapsed}s)` })
+                        jsx('span', { style: { color: 'var(--ui-warning, #d97706)', fontWeight: '600' }, children: st?.toolName ? `Tool: ${st?.toolName} (${elapsed}s)` : `Thinking (${elapsed}s)` })
                       ]
                     });
                   })
@@ -861,7 +1088,7 @@ function AgentActiveManagerPane() {
             jsxs('div', {
               style: { display: 'flex', flexDirection: 'column', gap: '6px' },
               children: [
-                Btn({
+                hasDesktopPoolControl && Btn({
                   onClick: () => performSwitch(pendingSwitchTarget, { expandSlot: true }),
                   variant: 'primary',
                   style: { justifyContent: 'center', padding: '8px' },
@@ -888,7 +1115,7 @@ function AgentActiveManagerPane() {
   });
 }
 
-// --- 4. Hermes Desktop Plugin エクスポート ---
+// --- 3. Hermes Desktop Plugin エクスポート ---
 const PANES = PANES_AREA || 'panes';
 const ROUTES = ROUTES_AREA || 'routes';
 
@@ -914,10 +1141,18 @@ export default {
       }
     ];
 
+    let unregister;
     if (typeof ctx.registerMany === 'function') {
-      ctx.registerMany(entries);
+      unregister = ctx.registerMany(entries);
     } else {
-      entries.forEach((e) => ctx.register(e));
+      const disposers = entries.map((e) => ctx.register(e));
+      unregister = () => {
+        disposers.forEach((d) => {
+          if (typeof d === 'function') d();
+        });
+      };
     }
+
+    return typeof unregister === 'function' ? unregister : () => {};
   }
 };
