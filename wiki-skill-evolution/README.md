@@ -35,6 +35,19 @@ Ensures that errors encountered during real-world agent execution (e.g., Python 
 
 ---
 
+## ⚖️ Design Approach: Why Heuristics? (vs Heavy Prompt Evolution)
+
+Unlike heavy prompt evolution frameworks (e.g., DSPy + GEPA in `self-evolution`), WikiSkill Evolution is intentionally built around **deterministic, rule-based heuristics** for immediate runtime self-healing:
+
+- **80% of Real-World Agent Failures are Environmental**:
+  In production, agents rarely fail due to subtle prompt nuances; they fail on `ImportError`, incorrect file paths, timeouts, and missing OS permissions.
+- **Zero Token Cost & Millisecond Turnaround**:
+  Running iterative LLM reflection loops or genetic algorithms for simple environment-level fixes is expensive overkill. WikiSkill patches skills deterministically in milliseconds with **zero LLM API cost**.
+- **Deterministic & Safe**:
+  Eliminates the regression risks common in probabilistic prompt generation, acting as a lightweight **first-line of defense** for daily operations.
+
+---
+
 ## 🌟 Key Features
 
 1. **Automatic Error Interception (`post_tool_call` hook)**
@@ -142,6 +155,19 @@ AI エージェントが日々のタスクを実行する中で遭遇するエ�
           ▼
 [ 次回以降のセッションで同じエラーを回避 ]
 ```
+
+---
+
+## ⚖️ 設計アプローチ：なぜルールベース（Heuristics）なのか？
+
+公式の `self-evolution`（DSPy + GEPA）のような高度なプロンプト最適化フレームワークに対し、本プラグインは**「Fast-path（即時自己修復）」** に特化して設計されています。
+
+- **現場エラーの8割は環境・実行起因**:
+  実務でエージェントがスタックする最大の要因は、プロンプトの微細なニュアンスではなく `ImportError`、パス解決ミス、タイムアウト、権限エラーといった**機械的な環境エラー**です。
+- **ミリ秒修復 & APIコストゼロ**:
+  これらの定型エラーに対して重いLLM推論ループや遺伝的アルゴリズムを回すのは過剰装備（オーバーキル）です。本プラグインはルールベースで決定論的にパッチを適用するため、**推論API代は一切かからず、エラー発生の瞬間にミリ秒で修復**されます。
+- **決定論的で安全（リグレッションなし）**:
+  確率的なプロンプト書き換えに伴う「以前動いていたプロンプトの劣化（先祖返り）」リスクがありません。日々の運用を支える**「低コスト・即効性の第1防衛ライン」**として機能します。
 
 ---
 
