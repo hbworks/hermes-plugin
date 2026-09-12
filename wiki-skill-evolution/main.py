@@ -10,9 +10,10 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -157,12 +158,15 @@ class WikiSkillEvolutionPlugin:
         direct_md = skills_dir / f"{skill_name}.md"
         return direct_md if direct_md.exists() else None
 
-    def _run_terminal_command(self, cmd: str, cwd: Optional[Path] = None) -> Dict[str, Any]:
-        """Safely execute shell command in working directory."""
+    def _run_terminal_command(self, cmd: Union[str, List[str]], cwd: Optional[Path] = None) -> Dict[str, Any]:
+        """Safely execute command in working directory with shell=False."""
         try:
+            cmd_args = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+            if not cmd_args:
+                return {"exit_code": 0, "stdout": "", "stderr": ""}
             res = subprocess.run(
-                cmd,
-                shell=True,
+                cmd_args,
+                shell=False,
                 cwd=str(cwd) if cwd else None,
                 capture_output=True,
                 text=True,
@@ -250,7 +254,9 @@ class WikiSkillEvolutionPlugin:
             target_dir.mkdir(parents=True, exist_ok=True)
             skill_file = target_dir / "SKILL.md"
             skill_file.write_text(f"# {skill_name}\n\n自動生成されたスキル定義。\n\n## 実行手順\n- 基本タスクを実行する。\n", encoding="utf-8")
-            self._run_terminal_command("git init && git add SKILL.md && git commit -m 'Initial commit'", cwd=target_dir)
+            self._run_terminal_command(["git", "init"], cwd=target_dir)
+            self._run_terminal_command(["git", "add", "SKILL.md"], cwd=target_dir)
+            self._run_terminal_command(["git", "commit", "-m", "Initial commit"], cwd=target_dir)
 
         skill_dir = skill_file.parent
         original_content = skill_file.read_text(encoding="utf-8")
@@ -274,14 +280,14 @@ class WikiSkillEvolutionPlugin:
 
         if self._run_gating(skill_file):
             # 5. テスト合格: コミット
-            self._run_terminal_command("git add SKILL.md", cwd=skill_dir)
-            self._run_terminal_command(f"git commit -m 'WikiSkill 自律更新: {_now_str()}'", cwd=skill_dir)
+            self._run_terminal_command(["git", "add", "SKILL.md"], cwd=skill_dir)
+            self._run_terminal_command(["git", "commit", "-m", f"WikiSkill 自律更新: {_now_str()}"], cwd=skill_dir)
             report.update({"committed": True, "gating_passed": True, "status": "success", "message": f"スキル '{skill_name}' の自律更新とテスト・コミットが成功しました。"})
             self.recent_errors.clear()
         else:
             # 6. テスト失敗: ロールバック
             skill_file.write_text(original_content, encoding="utf-8")
-            self._run_terminal_command("git checkout HEAD -- SKILL.md", cwd=skill_dir)
+            self._run_terminal_command(["git", "checkout", "HEAD", "--", "SKILL.md"], cwd=skill_dir)
             report.update({"status": "rollback", "message": "Gating テストに失敗したため、スキルをロールバックしました。"})
 
         return report
