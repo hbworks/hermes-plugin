@@ -443,9 +443,19 @@ function AgentActiveManagerPane() {
   // 個別推論状態のリセット & スロット強制解放（関連するすべてのランタイムsessionIdを明示してバックエンド停止を実行）
   const handleResetInference = async (targetProfile) => {
     try {
+      // 複数接続・リモート環境対応: profileRoutes から route descriptor を取得
+      const routes = typeof host?.profileRoutes === 'function'
+        ? await host.profileRoutes().catch(() => null)
+        : null;
+      const targetRoute = Array.isArray(routes)
+        ? routes.find((r) => r.profile === targetProfile || r.targetProfile === targetProfile)
+        : null;
+      const routeTarget = targetRoute || targetProfile;
+      const targetProfileName = targetRoute?.profile ?? targetProfile;
+
       // 該当プロファイルのアクティブなランタイム sessionId をすべて特定
       const activeSids = Object.entries(sessionBotMapRef.current)
-        .filter(([_, bot]) => bot === targetProfile)
+        .filter(([_, bot]) => bot === targetProfile || bot === targetProfileName)
         .map(([sid]) => sid);
 
       if (focusedProfileRef.current === targetProfile && focusedSidRef.current && !activeSids.includes(focusedSidRef.current)) {
@@ -456,21 +466,21 @@ function AgentActiveManagerPane() {
       if (activeSids.length > 0) {
         for (const sid of activeSids) {
           const stopPayload = {
-            profile: targetProfile,
+            profile: targetProfileName,
             sessionId: sid,
             session_id: sid,
             abort: true
           };
           if (typeof host?.requestProfile === 'function') {
-            stopPromises.push(host.requestProfile(targetProfile, 'session.stop', stopPayload));
+            stopPromises.push(host.requestProfile(routeTarget, 'session.stop', stopPayload));
           } else if (typeof host?.request === 'function') {
             stopPromises.push(host.request('session.stop', stopPayload));
           }
         }
       } else {
-        const stopPayload = { profile: targetProfile, abort: true };
+        const stopPayload = { profile: targetProfileName, abort: true };
         if (typeof host?.requestProfile === 'function') {
-          stopPromises.push(host.requestProfile(targetProfile, 'session.stop', stopPayload));
+          stopPromises.push(host.requestProfile(routeTarget, 'session.stop', stopPayload));
         } else if (typeof host?.request === 'function') {
           stopPromises.push(host.request('session.stop', stopPayload));
         }
