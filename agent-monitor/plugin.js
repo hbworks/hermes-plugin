@@ -264,13 +264,30 @@ function AgentActivityPane() {
             }
           }));
         }
+
+        // ランタイムセッション情報（sessions.list）から正確な sessionId -> profile マッピングを取得
+        try {
+          const sessRes = await host.request('sessions.list', {}).catch(() => null);
+          const activeSessions = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
+          for (const s of activeSessions) {
+            const sId = s.id || s.sessionId || s.session_id;
+            const sProf = s.profile || s.profileName || s.agent;
+            if (sId && sProf) {
+              sessionBotMapRef.current[sId] = String(sProf).toLowerCase();
+            }
+          }
+        } catch (_) {}
+
+        if (focusedSidRef.current && focusedProfileRef.current) {
+          sessionBotMapRef.current[focusedSidRef.current] = focusedProfileRef.current;
+        }
       } catch (err) {
         console.debug('[AgentMonitor] sync error:', err);
       }
     };
 
     syncRoster();
-    const interval = setInterval(syncRoster, 5000);
+    const interval = setInterval(syncRoster, 4000);
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
@@ -288,7 +305,8 @@ function AgentActivityPane() {
 
         const isToolCompleted = curStatus?.status === 'tool_completed' && (now - (curStatus.completedAt || 0) < 3000);
         const eventBusy = (now - lastActive < 15000) && Boolean(curStatus) && !curStatus.isFinished;
-        const directSessBusy = (!bState.isTeam && bState.lastSessionId) ? Boolean(busyBySession[bState.lastSessionId]) : false;
+        const runtimeSessBusy = Object.entries(sessionBotMapRef.current).some(([sid, b]) => b === botName && Boolean(busyBySession[sid]));
+        const directSessBusy = runtimeSessBusy || ((!bState.isTeam && bState.lastSessionId) ? Boolean(busyBySession[bState.lastSessionId]) : false);
 
         if (isToolCompleted) {
           nextTimers[botName] = {
@@ -355,6 +373,9 @@ function AgentActivityPane() {
             focusedSidRef.current
           );
           const sid = event.sessionId || event.session_id || payload?.sessionId;
+          if (sid && rawProfile) {
+            sessionBotMapRef.current[sid] = rawProfile;
+          }
 
           let textChunk = typeof payload === 'string' ? payload : (payload?.text || (payload?.content ? (typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content)) : ''));
           const isDelta = matchAny(eventType, ['delta', 'stream', 'chunk']);
@@ -468,9 +489,20 @@ function AgentActivityPane() {
                             matched?.last_session?.resolved_id || matched?.last_session?.id ||
                             botStates[targetBot]?.lastSessionId;
 
+      // 複数接続環境対応: host.profileRoutes() は Promise を返すため await して取得
+      const routes = typeof host?.profileRoutes === 'function'
+        ? await host.profileRoutes().catch(() => null)
+        : null;
+      const targetRoute = Array.isArray(routes)
+        ? routes.find((r) => r.profile === targetBot || r.targetProfile === targetBot)
+        : null;
+      const routeTarget = targetRoute || targetBot;
+      const targetConnId = targetRoute?.connectionId ?? null;
+      const targetProfileName = targetRoute?.profile ?? targetBot;
+
       if (!targetSessionId) {
         const fetchSess = typeof host?.requestProfile === 'function'
-          ? host.requestProfile(targetBot, 'session.list', { limit: 5, include_hidden: true })
+          ? host.requestProfile(routeTarget, 'session.list', { limit: 5, include_hidden: true })
           : host.request('session.list', { profile: targetBot, limit: 5, include_hidden: true });
         const sessRes = await fetchSess.catch(() => null);
         const nonTeam = (sessRes?.sessions || []).find((s) => !(s.title || '').toLowerCase().includes('group:'));
@@ -479,24 +511,44 @@ function AgentActivityPane() {
 
       if (!targetSessionId) {
         const createSess = typeof host?.requestProfile === 'function'
-          ? host.requestProfile(targetBot, 'session.create', {})
+          ? host.requestProfile(routeTarget, 'session.create', {})
           : host.request('session.create', { profile: targetBot });
         const createRes = await createSess.catch(() => null);
         targetSessionId = createRes?.session?.id || createRes?.id;
       }
 
       if (targetSessionId) {
-        if (typeof host?.ensureAgent === 'function') await host.ensureAgent(targetSessionId, targetBot).catch(() => {});
+        // 公式仕様: host.ensureAgent(connectionId, profile) - route 由来の connectionId と source profile を指定
+        if (typeof host?.ensureAgent === 'function') {
+          await host.ensureAgent(targetConnId, targetProfileName).catch(() => {});
+        }
+        // 公式仕様: route-aware な session.open
         if (typeof host?.openSession === 'function') {
-          try { await host.openSession(targetSessionId, { profile: targetBot, awaitHydration: false }); return; } catch (_) {}
+          try {
+            await host.openSession(targetSessionId, {
+              profile: targetProfileName,
+              route: targetRoute || undefined,
+              connectionId: targetConnId || undefined,
+              awaitHydration: false
+            });
+            return;
+          } catch (_) {}
         }
         if (typeof host?.switchSession === 'function') {
-          try { await host.switchSession(targetSessionId, { targetProfile: targetBot }); return; } catch (_) {}
+          try {
+            await host.switchSession(targetSessionId, {
+              targetProfile: targetRoute?.targetProfile ?? targetProfileName,
+              profile: targetProfileName,
+              route: targetRoute || undefined,
+              connectionId: targetConnId || undefined
+            });
+            return;
+          } catch (_) {}
         }
         if (typeof host?.navigate === 'function') host.navigate(`/${targetSessionId}`);
         else if (typeof window !== 'undefined') window.location.hash = `#/${targetSessionId}`;
       } else {
-        if (typeof host?.ensureAgent === 'function') await host.ensureAgent(null, targetBot).catch(() => {});
+        if (typeof host?.ensureAgent === 'function') await host.ensureAgent(targetConnId, targetProfileName).catch(() => {});
         if (typeof host?.navigate === 'function') host.navigate('/');
         else if (typeof window !== 'undefined') window.location.hash = '#/';
       }
@@ -757,10 +809,18 @@ export default {
       }
     ];
 
+    let unregister;
     if (typeof ctx.registerMany === 'function') {
-      ctx.registerMany(entries);
+      unregister = ctx.registerMany(entries);
     } else {
-      entries.forEach((e) => ctx.register(e));
+      const disposers = entries.map((e) => ctx.register(e));
+      unregister = () => {
+        disposers.forEach((d) => {
+          if (typeof d === 'function') d();
+        });
+      };
     }
+
+    return typeof unregister === 'function' ? unregister : () => {};
   }
 };
