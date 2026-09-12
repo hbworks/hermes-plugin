@@ -745,26 +745,47 @@ function AgentActiveManagerPane() {
         await new Promise((r) => setTimeout(r, 100));
       }
 
+      // 複数接続環境対応: host.profileRoutes() は Promise を返すため await して取得
+      const routes = typeof host?.profileRoutes === 'function'
+        ? await host.profileRoutes().catch(() => null)
+        : null;
+      const targetRoute = Array.isArray(routes)
+        ? routes.find((r) => r.profile === targetBot || r.targetProfile === targetBot)
+        : null;
+      const routeTarget = targetRoute || targetBot;
+      const targetConnId = targetRoute?.connectionId ?? null;
+      const targetProfileName = targetRoute?.profile ?? targetBot;
+
       const matched = (rosterRef.current || []).find((p) => p.name === targetBot);
       let targetSessionId = matched?.canonical_session?.resolved_id || matched?.canonical_session?.id ||
                             matched?.last_session?.resolved_id || matched?.last_session?.id;
 
       if (!targetSessionId) {
         const createSess = typeof host?.requestProfile === 'function'
-          ? host.requestProfile(targetBot, 'session.create', {})
+          ? host.requestProfile(routeTarget, 'session.create', {})
           : host.request?.('session.create', { profile: targetBot });
         const createRes = await createSess?.catch(() => null);
         targetSessionId = createRes?.session?.id || createRes?.id;
       }
 
-      // 公式仕様: host.ensureAgent(connectionId, profile) - 単一接続時は null でデフォルト接続を使用
-      await host?.ensureAgent?.(null, targetBot).catch(() => {});
+      // 公式仕様: host.ensureAgent(connectionId, profile) - route 由来の connectionId と source profile を指定
+      await host?.ensureAgent?.(targetConnId, targetProfileName).catch(() => {});
 
       if (targetSessionId) {
         if (typeof host?.openSession === 'function') {
-          await host.openSession(targetSessionId, { profile: targetBot, awaitHydration: false }).catch(() => null);
+          await host.openSession(targetSessionId, {
+            profile: targetProfileName,
+            route: targetRoute || undefined,
+            connectionId: targetConnId || undefined,
+            awaitHydration: false
+          }).catch(() => null);
         } else if (typeof host?.switchSession === 'function') {
-          await host.switchSession(targetSessionId, { targetProfile: targetBot }).catch(() => host?.navigate?.(`/${targetSessionId}`));
+          await host.switchSession(targetSessionId, {
+            targetProfile: targetRoute?.targetProfile ?? targetProfileName,
+            profile: targetProfileName,
+            route: targetRoute || undefined,
+            connectionId: targetConnId || undefined
+          }).catch(() => host?.navigate?.(`/${targetSessionId}`));
         } else if (typeof host?.navigate === 'function') {
           host.navigate(`/${targetSessionId}`);
         } else if (typeof window !== 'undefined') {
