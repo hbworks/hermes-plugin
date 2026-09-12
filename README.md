@@ -7,6 +7,20 @@ Providing production-grade enhancements for security (credential redaction), bac
 
 ---
 
+## 💡 Design Philosophy
+
+Rather than chasing an exhaustive list of features or unnecessary algorithmic complexity, plugins in this repository are built with a laser focus on **production reliability, zero maintenance overhead, and immediate real-world impact**.
+
+1. **Zero External Dependencies (Python stdlib First)**
+   - All Agent plugins rely strictly on the standard Python library (`sqlite3`, `re`, `urllib`, `dataclasses`, etc.).
+   - Eliminates dependency hell, pip package conflicts, and security vulnerabilities introduced by bloated supply chains. Works right out of the box.
+2. **Core Essentials Focused**
+   - Instead of 20+ peripheral plugins that clutter the environment, we concentrate exclusively on solving the fatal pain points every Hermes operator encounters: credential exposure, desktop profile-switch lockups, and heavyweight DB overhead.
+3. **Fast-path & Deterministic Reliability**
+   - We prioritize fast, predictable, rule-based heuristics over expensive multi-turn LLM loops for routine operational tasks. Fixes run in milliseconds with **zero token cost**.
+
+---
+
 ## 📦 Available Plugins
 
 | Plugin | Target Environment | Language | Description | Documentation |
@@ -157,6 +171,20 @@ python3 credential-safety/scan_credentials.py
 
 Hermes AI エージェント（[Hermes Agent](https://github.com/NousResearch/hermes-agent)）およびデスクトップクライアント（**Hermes Desktop**）向けの機能拡張プラグイン集です。  
 セキュリティ強化、セッション・スロット管理、リアルタイム監視、長期記憶、自己進化ループなど、実践的な運用を支援するプラグインを提供しています。
+
+---
+
+## 💡 設計思想 (Design Philosophy)
+
+本リポジトリのプラグイン群は、機能の網羅性や無用なアルゴリズムの複雑さを競うのではなく、**「実用性・壊れにくさ（ゼロ保守）・現場の即効性」** を最優先に設計されています。
+
+1. **Zero External Dependencies（Python標準ライブラリ主義）**
+   - すべての Agent プラグインは Python 標準ライブラリ（`sqlite3`, `re`, `urllib` 等）のみで完結。
+   - 外部 pip パッケージの依存関係衝突（Dependency Hell）やサプライチェーンリスクを原理的に排除。導入した瞬間から確実に動作します。
+2. **Core Essentials Focused（厳選された高密度コア機能）**
+   - 雑多な周辺プラグインを増やして肥大化させるのではなく、Hermes 運用で誰もが直面する致命的な痛み（認証情報漏洩、スロット枯渇/フリーズ、重い外部DB不要の記憶管理）に極限まで集中しています。
+3. **Fast-path & Deterministic（即効性・決定論的アプローチ）**
+   - 過剰に重い機械学習モデルや反復的な LLM 呼び出しに頼らず、予測可能で高速・安全なヒューリスティック制御を採用。余計な API コストを発生させず、ミリ秒単位で現場のエラーを解決します。
 
 ---
 
