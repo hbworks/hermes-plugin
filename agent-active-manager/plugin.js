@@ -76,9 +76,16 @@ const formatRelativeTime = (ts) => {
 };
 
 const getLocale = () => {
-  if (typeof navigator === 'undefined') return 'en';
-  return (navigator.language || navigator.userLanguage || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
-};
+  if (typeof document !== 'undefined') {
+    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang')
+    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja'
+  }
+  if (typeof navigator !== 'undefined') {
+    const langs = navigator.languages || [navigator.language || navigator.userLanguage || '']
+    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
+  }
+  return 'en'
+}
 
 const I18N = {
   ja: {
