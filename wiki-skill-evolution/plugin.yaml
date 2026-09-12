@@ -1,4 +1,4 @@
-name: wiki_skill_evolution
+name: wiki-skill-evolution
 version: "1.0.0"
 description: >
   WikiSkill 自律進化ループ（Raw → Wiki → Skill）をプラグインとして実装。

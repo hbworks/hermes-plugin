@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_NAME = "wiki_skill_evolution"
+PLUGIN_NAME = "wiki-skill-evolution"
 DEFAULT_SKILL_NAME = "default_skill"
 
 GOLDEN_TASKS = [
