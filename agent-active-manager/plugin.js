@@ -87,16 +87,22 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
     return focusedProfile;
   }
 
-  // 3. ペイロード内の直接のボット指定（※ role は除外）
+  // 3. 最新Hermes公式の turn_author / author / sender を最優先で認識
+  const author = ev.turn_author || ev.turnAuthor || p?.turn_author || p?.turnAuthor ||
+                 ev.author || p?.author || ev.sender || p?.sender;
+  if (typeof author === 'string' && author.trim()) return author.trim().toLowerCase();
+  if (author?.profile || author?.name || author?.id) return (author.profile || author.name || author.id).trim().toLowerCase();
+
+  // 4. ペイロード内の直接のボット指定（※ role は除外）
   const direct = ev.agent || ev.bot || ev.speaker ||
-                 p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.agentName;
+                 p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName;
   if (typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
 
-  // 4. from フィールド
+  // 5. from フィールド
   if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
   if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
 
-  // 5. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
+  // 6. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
   const evProf = (ev.profile || p?.profile || '').trim().toLowerCase();
   if (evProf) {
     if (evProf === 'default' && focusedProfile && focusedProfile !== 'default') {
@@ -106,7 +112,7 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
     return evProf;
   }
 
-  // 6. フォーカス中プロファイルへのフォールバック
+  // 7. フォーカス中プロファイルへのフォールバック
   if (focusedProfile) {
     if (sid) sMap[sid] = focusedProfile;
     return focusedProfile;
@@ -288,6 +294,19 @@ function AgentActiveManagerPane() {
       delete next[targetProfile];
       return next;
     });
+  };
+
+  // 推論状態のリセット & スロット強制解放（最新Hermesの世代管理・中断機能と連動）
+  const handleResetInference = async (targetProfile) => {
+    markInferenceFinished(targetProfile, 'Reset');
+    try {
+      if (typeof host?.requestProfile === 'function') {
+        await host.requestProfile(targetProfile, 'session.stop', {}).catch(() => {});
+      } else if (typeof host?.request === 'function') {
+        await host.request('session.stop', { profile: targetProfile }).catch(() => {});
+      }
+      host?.notify?.(`"${targetProfile}" の推論状態をリセットし、スロットを解放しました`);
+    } catch (_) {}
   };
 
   // Gatewayイベントの監視（推論状態と直前推論履歴）
@@ -511,7 +530,9 @@ function AgentActiveManagerPane() {
 
       if (targetSessionId) {
         await host?.ensureAgent?.(targetSessionId, targetBot).catch(() => {});
-        if (typeof host?.switchSession === 'function') {
+        if (typeof host?.openSession === 'function') {
+          await host.openSession(targetSessionId, { profile: targetBot, awaitHydration: false }).catch(() => null);
+        } else if (typeof host?.switchSession === 'function') {
           await host.switchSession(targetSessionId, { targetProfile: targetBot }).catch(() => host?.navigate?.(`/${targetSessionId}`));
         } else if (typeof host?.navigate === 'function') {
           host.navigate(`/${targetSessionId}`);
@@ -716,11 +737,11 @@ function AgentActiveManagerPane() {
                         style: { display: 'flex', alignItems: 'center', gap: '4px' },
                         children: [
                           isBusy && Btn({
-                            onClick: () => markInferenceFinished(name, 'Reset'),
+                            onClick: () => handleResetInference(name),
                             variant: 'secondary',
                             style: { padding: '3px 6px', fontSize: '10px' },
-                            title: '推論ステータスをリセット',
-                            children: '↺ Reset'
+                            title: '推論状態をリセットし、実行中のスロットを即時解放',
+                            children: '↺ Reset & Free Slot'
                           }),
                           !isFocused && Btn({
                             disabled: isSwitching,
