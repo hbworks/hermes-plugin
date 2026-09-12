@@ -145,3 +145,10 @@ python3 credential-safety/tests/test_credential_safety.py -v
 # 過去の会話DB・ログの認証情報監査スキャン
 python3 credential-safety/scan_credentials.py
 ```
+
+---
+
+## 📄 ライセンス
+
+本リポジトリ内のコードは [MIT License](./LICENSE) のもとで公開されています。
+
