@@ -93,16 +93,22 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
     return focusedProfile;
   }
 
-  // 3. ペイロード内の直接のボット指定（※ role は除外）
+  // 3. 最新Hermes公式の turn_author / author / sender を最優先で認識
+  const author = ev.turn_author || ev.turnAuthor || p?.turn_author || p?.turnAuthor ||
+                 ev.author || p?.author || ev.sender || p?.sender;
+  if (typeof author === 'string' && author.trim()) return author.trim().toLowerCase();
+  if (author?.profile || author?.name || author?.id) return (author.profile || author.name || author.id).trim().toLowerCase();
+
+  // 4. ペイロード内の直接のボット指定（※ role は除外）
   const direct = ev.agent || ev.bot || ev.speaker ||
-                 p?.agent || p?.bot || p?.speaker || p?.member || p?.author || p?.agentName;
+                 p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName;
   if (direct && typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
 
-  // 4. from フィールド
+  // 5. from フィールド
   if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
   if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
 
-  // 5. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
+  // 6. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
   const evProf = (ev.profile || p?.profile || '').trim().toLowerCase();
   if (evProf) {
     if (evProf === 'default' && focusedProfile && focusedProfile !== 'default') {
@@ -112,7 +118,7 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
     return evProf;
   }
 
-  // 6. フォーカス中プロファイルへのフォールバック
+  // 7. フォーカス中プロファイルへのフォールバック
   if (focusedProfile) {
     if (sid) sMap[sid] = focusedProfile;
     return focusedProfile;
@@ -352,6 +358,10 @@ function AgentActivityPane() {
             if (!hasActivity) return;
           }
 
+          // ユーザー入力メッセージやシステム内部通知そのものはエージェント稼働中ではないため除外
+          const role = payload?.role || payload?.message?.role || event.role;
+          if (role === 'user' || role === 'system') return;
+
           const rawProfile = extractProfile(
             event,
             payload,
@@ -365,14 +375,39 @@ function AgentActivityPane() {
           let textChunk = typeof payload === 'string' ? payload : (payload?.text || (payload?.content ? (typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content)) : ''));
           const isDelta = matchAny(eventType, ['delta', 'stream', 'chunk']);
 
-          // イベント種別判定
-          const isToolResult = matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result) || payload?.role === 'tool';
-          const isToolCall = !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec', 'action']) || Boolean(payload?.tool || payload?.tool_call || payload?.function));
+          // 完了・終了シグナルの総合判定（最新Gatewayのイベント拡充に対応）
+          const isFinished = matchAny(eventType, [
+            'turn.finish', 'turn.end', 'turn.complete', 'turn.finished',
+            'chat.complete', 'chat.finish',
+            'agent.finish', 'agent.idle',
+            'session.idle', 'session.finish',
+            'run.finish', 'run.complete',
+            'stream.finish', 'stream.end',
+            'generation.finish', 'generation.complete'
+          ]) ||
+          eventType.endsWith('.finish') ||
+          eventType.endsWith('.complete') ||
+          eventType.endsWith('.end') ||
+          eventType.endsWith('.idle') ||
+          eventType.endsWith('.done') ||
+          Boolean(payload?.finish_reason) ||
+          payload?.done === true ||
+          payload?.status === 'completed';
+
+          // ツール関連
+          const isToolResult = !isFinished && (matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result) || role === 'tool');
+          const isToolCall = !isFinished && !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec', 'action']) || Boolean(payload?.tool || payload?.tool_call || payload?.function));
           const toolName = (isToolCall || isToolResult) ? (payload?.tool?.name || payload?.tool || payload?.name || payload?.function?.name || payload?.action || payload?.tool_name || 'tool') : '';
 
-          const isThinking = !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning || payload?.thought));
-          const isGenerating = !isToolCall && !isToolResult && !isThinking && (isDelta || matchAny(eventType, ['stream', 'chunk', 'message']) || Boolean(textChunk));
-          const isFinished = matchAny(eventType, ['turn.finish', 'turn.end', 'turn.complete', 'chat.complete', 'session.idle']) || eventType.endsWith('.finish') || eventType.endsWith('.complete');
+          // 思考中
+          const isThinking = !isFinished && !isToolCall && !isToolResult && (matchAny(eventType, ['reason', 'think', 'thought', 'turn.start']) || Boolean(payload?.reasoning || payload?.thought));
+
+          // ストリーム生成中
+          const isGenerating = !isFinished && !isToolCall && !isToolResult && !isThinking && (
+            isDelta ||
+            matchAny(eventType, ['stream', 'chunk', 'agent.stream', 'generate', 'generation']) ||
+            (matchAny(eventType, ['turn.progress']) && Boolean(textChunk))
+          );
 
           const now = Date.now();
           if (rawProfile) {
@@ -468,6 +503,9 @@ function AgentActivityPane() {
 
       if (targetSessionId) {
         if (typeof host?.ensureAgent === 'function') await host.ensureAgent(targetSessionId, targetBot).catch(() => {});
+        if (typeof host?.openSession === 'function') {
+          try { await host.openSession(targetSessionId, { profile: targetBot, awaitHydration: false }); return; } catch (_) {}
+        }
         if (typeof host?.switchSession === 'function') {
           try { await host.switchSession(targetSessionId, { targetProfile: targetBot }); return; } catch (_) {}
         }
