@@ -75,6 +75,36 @@ const formatRelativeTime = (ts) => {
   return min < 60 ? `${min}m ago` : `${Math.floor(min / 60)}h ago`;
 };
 
+const getLocale = () => {
+  if (typeof navigator === 'undefined') return 'en';
+  return (navigator.language || navigator.userLanguage || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
+};
+
+const I18N = {
+  ja: {
+    incSlot: 'スロット枠を+1増やす',
+    decSlot: 'スロット枠を-1減らす',
+    resetAllTooltip: 'すべてのエージェントの推論ステータスをリセット',
+    resetSlotTooltip: '推論状態をリセットし、実行中のスロットを即時解放',
+    resetSlotNotif: (p) => `"${p}" の推論状態をリセットし、スロットを解放しました`,
+    modalTitle: '全エージェントが作業・推論中です',
+    modalDesc1: (max) => `現在起動中のすべてのスロット（${max}枠）でエージェントが推論やツールを実行しています。`,
+    modalDesc2: 'このまま切り替えると、実行中のタスクが中断したり、スロット待ちでタイムアウト（エラー）になる可能性があります。',
+    modalRunning: '現在実行中のエージェント:',
+  },
+  en: {
+    incSlot: 'Increase slot limit (+1)',
+    decSlot: 'Decrease slot limit (-1)',
+    resetAllTooltip: 'Reset inference status for all agents',
+    resetSlotTooltip: 'Reset inference state and immediately free running slot',
+    resetSlotNotif: (p) => `Reset inference state and released slot for "${p}"`,
+    modalTitle: 'All Agents Are Busy',
+    modalDesc1: (max) => `All active slots (${max}) are currently busy with reasoning or tool execution.`,
+    modalDesc2: 'Switching now may interrupt ongoing tasks or cause a timeout error while waiting for a free slot.',
+    modalRunning: 'Currently running agents:',
+  }
+};
+
 const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
   const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
 
@@ -171,6 +201,7 @@ function AgentActiveManagerPane() {
   const focusedProfileName = useValue(focusedProfileAtom) || 'default';
   const focusedSidAtom = host.state?.focusedSessionId || host.state?.focusedStoredSessionId;
   const focusedSessionId = useValue(focusedSidAtom) || '';
+  const t = I18N[getLocale()] || I18N.en;
 
   const [poolLimits, setPoolLimits] = useState({ maxBackends: 3, idleMs: 600000 });
   const [roster, setRoster] = useState([]);
@@ -305,7 +336,7 @@ function AgentActiveManagerPane() {
       } else if (typeof host?.request === 'function') {
         await host.request('session.stop', { profile: targetProfile }).catch(() => {});
       }
-      host?.notify?.(`"${targetProfile}" の推論状態をリセットし、スロットを解放しました`);
+      host?.notify?.(I18N[getLocale()]?.resetSlotNotif?.(targetProfile) || `Reset inference state and released slot for "${targetProfile}"`);
     } catch (_) {}
   };
 
@@ -611,8 +642,8 @@ function AgentActiveManagerPane() {
                 style: { display: 'flex', alignItems: 'center', gap: '4px' },
                 children: [
                   Badge(`${runningCount} / ${maxBackends} Active`, isFull ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', isFull ? '#ef4444' : '#10b981'),
-                  Btn({ onClick: () => handleChangeMaxBackends(1), variant: 'secondary', title: 'スロット枠を+1増やす', style: { padding: '2px 6px', fontSize: '10px' }, children: '+1' }),
-                  maxBackends > 1 && Btn({ onClick: () => handleChangeMaxBackends(-1), variant: 'secondary', title: 'スロット枠を-1減らす', style: { padding: '2px 6px', fontSize: '10px' }, children: '-1' })
+                  Btn({ onClick: () => handleChangeMaxBackends(1), variant: 'secondary', title: t.incSlot, style: { padding: '2px 6px', fontSize: '10px' }, children: '+1' }),
+                  maxBackends > 1 && Btn({ onClick: () => handleChangeMaxBackends(-1), variant: 'secondary', title: t.decSlot, style: { padding: '2px 6px', fontSize: '10px' }, children: '-1' })
                 ]
               })
             ]
@@ -679,7 +710,7 @@ function AgentActiveManagerPane() {
                     },
                     variant: 'secondary',
                     style: { padding: '2px 6px', fontSize: '10px', color: '#4b5563' },
-                    title: 'すべてのエージェントの推論ステータスをリセット',
+                    title: t.resetAllTooltip,
                     children: '↺ Reset'
                   })
                 ]
@@ -740,7 +771,7 @@ function AgentActiveManagerPane() {
                             onClick: () => handleResetInference(name),
                             variant: 'secondary',
                             style: { padding: '3px 6px', fontSize: '10px' },
-                            title: '推論状態をリセットし、実行中のスロットを即時解放',
+                            title: t.resetSlotTooltip,
                             children: '↺ Reset & Free Slot'
                           }),
                           !isFocused && Btn({
@@ -788,15 +819,15 @@ function AgentActiveManagerPane() {
               style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' },
               children: [
                 jsx('span', { style: { fontSize: '20px' }, children: '⚠️' }),
-                jsx('h3', { style: { margin: 0, fontSize: '14px', fontWeight: '700', color: '#b45309' }, children: '全エージェントが作業・推論中です' })
+                jsx('h3', { style: { margin: 0, fontSize: '14px', fontWeight: '700', color: '#b45309' }, children: t.modalTitle })
               ]
             }),
             jsxs('p', {
               style: { fontSize: '12px', lineHeight: '1.5', color: '#4b5563', margin: '0 0 12px 0' },
               children: [
-                `現在起動中のすべてのスロット（${maxBackends}枠）でエージェントが推論やツールを実行しています。`,
+                t.modalDesc1(maxBackends),
                 jsx('br', {}),
-                'このまま切り替えると、実行中のタスクが中断したり、スロット待ちでタイムアウト（エラー）になる可能性があります。'
+                t.modalDesc2
               ]
             }),
             jsx('div', {
@@ -804,7 +835,7 @@ function AgentActiveManagerPane() {
               children: jsxs('div', {
                 style: { fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '4px' },
                 children: [
-                  jsx('span', { style: { fontWeight: '600', color: '#374151' }, children: '現在実行中のエージェント:' }),
+                  jsx('span', { style: { fontWeight: '600', color: '#374151' }, children: t.modalRunning }),
                   busyProfiles.map((bName) => {
                     const st = agentStatus[bName];
                     const elapsed = st?.start ? Math.max(1, Math.round((Date.now() - st.start) / 1000)) : 0;
