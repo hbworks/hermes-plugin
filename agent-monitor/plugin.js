@@ -64,12 +64,48 @@ if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
 // --- 共通ヘルパー & 設定 ---
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
-const STATUS_CONFIG = {
-  thinking:       { color: '#8b5cf6', icon: '●',  pulse: '#8b5cf6', label: (e) => `● 推論中 (${e}s 経過)` },
-  tool_start:     { color: '#f59e0b', icon: '🚀', pulse: '#f59e0b', label: (_, t) => `🚀 呼出: ${t || 'tool'}` },
-  tool:           { color: '#8b5cf6', icon: '⚡', pulse: '#8b5cf6', label: (e, t) => `⚡ 実行中: ${t || 'tool'} (${e}s)` },
-  tool_completed: { color: '#10b981', icon: '✅', pulse: '#10b981', label: (e, t, d) => `✅ 完了: ${t || 'tool'} (${d || e}s)` },
-  generating:     { color: '#3b82f6', icon: '✍️', pulse: '#3b82f6', label: (e) => `✍️ 出力中 (${e}s 経過)` }
+const getLocale = () => {
+  if (typeof navigator === 'undefined') return 'en';
+  return (navigator.language || navigator.userLanguage || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
+};
+
+const I18N = {
+  ja: {
+    activeSuffix: '稼働中',
+    filterAll: 'すべて',
+    filterBusy: '推論/ツール',
+    waitingTitle: 'イベント待機中',
+    waitingDesc: 'エージェントが思考やツール実行を行うと、ここにリアルタイムログが流れます',
+    statusThinking: (e) => `● 推論中 (${e}s 経過)`,
+    statusToolStart: (t) => `🚀 呼出: ${t || 'tool'}`,
+    statusToolRunning: (e, t) => `⚡ 実行中: ${t || 'tool'} (${e}s)`,
+    statusToolDone: (e, t, d) => `✅ 完了: ${t || 'tool'} (${d || e}s)`,
+    statusGenerating: (e) => `✍️ 出力中 (${e}s 経過)`
+  },
+  en: {
+    activeSuffix: 'Active',
+    filterAll: 'All',
+    filterBusy: 'Thinking/Tools',
+    waitingTitle: 'Waiting for events',
+    waitingDesc: 'Real-time logs will appear here when agents reason or execute tools',
+    statusThinking: (e) => `● Thinking (${e}s)`,
+    statusToolStart: (t) => `🚀 Calling: ${t || 'tool'}`,
+    statusToolRunning: (e, t) => `⚡ Running: ${t || 'tool'} (${e}s)`,
+    statusToolDone: (e, t, d) => `✅ Completed: ${t || 'tool'} (${d || e}s)`,
+    statusGenerating: (e) => `✍️ Generating (${e}s)`
+  }
+};
+
+const getStatusConfig = () => {
+  const loc = getLocale();
+  const t = I18N[loc] || I18N.en;
+  return {
+    thinking:       { color: '#8b5cf6', icon: '●',  pulse: '#8b5cf6', label: (e) => t.statusThinking(e) },
+    tool_start:     { color: '#f59e0b', icon: '🚀', pulse: '#f59e0b', label: (_, tool) => t.statusToolStart(tool) },
+    tool:           { color: '#8b5cf6', icon: '⚡', pulse: '#8b5cf6', label: (e, tool) => t.statusToolRunning(e, tool) },
+    tool_completed: { color: '#10b981', icon: '✅', pulse: '#10b981', label: (e, tool, d) => t.statusToolDone(e, tool, d) },
+    generating:     { color: '#3b82f6', icon: '✍️', pulse: '#3b82f6', label: (e) => t.statusGenerating(e) }
+  };
 };
 
 const getActivityTypeMeta = (type) => {
@@ -552,7 +588,7 @@ function AgentActivityPane() {
           }),
           jsx('span', {
             style: { fontSize: '10px', fontWeight: '500', color: activeCount > 0 ? '#10b981' : '#8e8e93' },
-            children: activeCount > 0 ? `${activeCount} 稼働中` : 'Idle'
+            children: activeCount > 0 ? `${activeCount} ${I18N[getLocale()]?.activeSuffix || 'Active'}` : 'Idle'
           })
         ]
       }),
@@ -566,6 +602,7 @@ function AgentActivityPane() {
           const isBusy = Boolean(timerInfo);
           const elapsed = timerInfo?.elapsed || 0;
           const statusType = timerInfo?.status || 'idle';
+          const STATUS_CONFIG = getStatusConfig();
           const cfg = STATUS_CONFIG[statusType];
           const isFocused = focusedProfileName === botName;
           const bState = botStates[botName] || {};
@@ -698,8 +735,8 @@ function AgentActivityPane() {
           jsxs('div', {
             style: { ...S.flexRow, gap: '4px' },
             children: [
-              jsx('button', { onClick: () => setFilter('all'), style: S.filterBtn(filter === 'all'), children: 'すべて' }),
-              jsx('button', { onClick: () => setFilter('busy'), style: S.filterBtn(filter === 'busy'), children: '推論/ツール' }),
+              jsx('button', { onClick: () => setFilter('all'), style: S.filterBtn(filter === 'all'), children: I18N[getLocale()]?.filterAll || 'All' }),
+              jsx('button', { onClick: () => setFilter('busy'), style: S.filterBtn(filter === 'busy'), children: I18N[getLocale()]?.filterBusy || 'Thinking/Tools' }),
               jsx('button', { onClick: () => setActivities([]), style: { background: 'transparent', color: '#c7c7cc', border: 'none', padding: '2px 4px', fontSize: '10px', cursor: 'pointer' }, children: '✕' })
             ]
           })
@@ -714,8 +751,8 @@ function AgentActivityPane() {
               style: { color: '#8e8e93', fontSize: '11px', textAlign: 'center', padding: '28px 16px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' },
               children: [
                 jsx('span', { style: { fontSize: '18px' }, children: '📡' }),
-                jsx('span', { style: { fontWeight: '500' }, children: 'イベント待機中' }),
-                jsx('span', { style: { fontSize: '10px', color: '#aeaeaf', lineHeight: '1.4' }, children: 'エージェントが思考やツール実行を行うと、ここにリアルタイムログが流れます' })
+                jsx('span', { style: { fontWeight: '500' }, children: I18N[getLocale()]?.waitingTitle || 'Waiting for events' }),
+                jsx('span', { style: { fontSize: '10px', color: '#aeaeaf', lineHeight: '1.4' }, children: I18N[getLocale()]?.waitingDesc || 'Real-time logs will appear here' })
               ]
             })
           : filteredActivities.map((act) => {
