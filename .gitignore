@@ -60,3 +60,8 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+
+# Backups & Temporary files
+*.bak
+*.backup
+*.tmp
