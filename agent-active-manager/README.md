@@ -1,5 +1,91 @@
 # Agent Active Manager (Hermes Desktop Plugin)
 
+[ English | [日本語](#japanese) ]
+
+A smart Hermes Desktop plugin to **monitor and manage local backend concurrency slots and inference states**, completely eliminating profile-switch timeout errors.
+
+---
+
+## 🎯 Background & Motivation
+
+Hermes Desktop maintains a pool of running backend Python processes to enable rapid switching between agent profiles.
+
+However, several architectural constraints often led to frustrating profile-switch timeouts (`timed out while waiting for a free slot`):
+1. **Slot Limit**: Concurrently active backends are capped at a default limit (typically **3**).
+2. **LRU Eviction Delay**: Backends that communicated within the last 4 minutes are protected from automatic eviction to preserve active sessions.
+3. **All-Busy Deadlock**: After interacting with 3 agents, switching to a 4th agent encounters a "3/3 busy" state, blocking for 30 seconds before failing with a timeout error.
+4. **Hover Prewarm Trap**: Merely hovering over profile items in the sidebar triggers a 120ms prewarm timer that prematurely spins up backends, draining available slots without user intent.
+
+**Agent Active Manager** tracks agent activity in real time, intercepts prewarm timers, and provides interactive safeguards when slot limits are reached.
+
+---
+
+## 🌟 Key Features
+
+### 1. Real-time Slot Gauge & Quick Tuning
+* Visualizes active backend instances (e.g., `3 / 3 Active`) with dynamic color indicators.
+* Quick adjustment buttons (`+1` / `-1` Slot) to instantly expand or shrink concurrency limits.
+* One-click idle expiration presets (`2m` / `5m` / `10m`) to quickly adjust LRU retirement timing.
+
+### 2. Automatic Hover Prewarm Suppression
+* Hooks into the desktop runtime to neutralize the 120ms hover-intent prewarm timers (`useProfilePrewarm`), preventing accidental backend spin-ups.
+
+### 3. Recent Inference History Tracking
+* Displays the last action for each active agent with execution duration and timestamps (e.g., `⏱ Last: 15s ago (4s / Tool: search)`).
+* Highlights agents actively running inference or executing tools in real time.
+
+### 4. Safe Switch Confirmation Dialog
+* When switching to another agent while all configured slots are busy running active workloads:
+  * Prevents abrupt task interruption and timeout errors by displaying a warning dialog.
+  * Shows which agent is running and for how long, offering three safe options:
+    * **[+1 Slot & Safe Switch]**: Temporarily expands the slot limit to launch concurrently without timeouts.
+    * **[Force Switch (Risk of Timeout)]**: Proceeds immediately despite timeout risk.
+    * **[Cancel]**: Waits for ongoing work to complete.
+
+### 5. One-Click Safe Switching
+* Clean transitions to desired agents via `Switch ➔` or `Open` buttons when idle slots or capacities are available.
+
+---
+
+## 🚀 Installation
+
+Place the folder into the Hermes Desktop plugins directory `~/.hermes/desktop-plugins/`.
+
+### Option A: Copy Files
+
+```bash
+mkdir -p ~/.hermes/desktop-plugins
+cp -r ./agent-active-manager ~/.hermes/desktop-plugins/
+```
+
+### Option B: Symbolic Link (Recommended for Development)
+
+```bash
+mkdir -p ~/.hermes/desktop-plugins
+ln -s "$(pwd)/agent-active-manager" ~/.hermes/desktop-plugins/agent-active-manager
+```
+
+After launching (or reloading) Hermes Desktop, access the plugin from the right sidebar pane (Width: `330px`, Title: `Active Manager`) or via the route `/active-manager`.
+
+---
+
+## 📁 Directory Structure
+
+```text
+agent-active-manager/
+├── plugin.js       # Plugin implementation (ESM / @hermes/plugin-sdk)
+└── README.md       # Documentation
+```
+
+<br>
+
+---
+<a id="japanese"></a>
+
+# Agent Active Manager (日本語)
+
+[ [English](#agent-active-manager-hermes-desktop-plugin) | 日本語 ]
+
 Hermes Desktop における **「ローカルバックエンドの同時起動枠（スロット制限）」と「直前の推論状態」をスマートに管理・監視し、プロファイル切り替え時のタイムアウトエラーを完全に防止する** プラグインです。
 
 ---
@@ -42,10 +128,7 @@ Hermes Desktop は複数のエージェントを高速に切り替えるため�
     * **[Cancel]**（作業完了を待つ）
 
 ### 5. ワンクリック安全切り替え（Switch ➔）
-* スロットに空きがあるかアイドル中のエージェントが存在する場合は、`Switch ➔` または `Open` ボタンからスムーズに目的のエージェントへと遷移します（最新の `host.openSession` API による高速遷移に対応）。
-
-### 6. スロット即時回収 ＆ ハング推論リセット（↺ Reset & Free Slot）
-* 推論中またはツール実行中のエージェントで `↺ Reset & Free Slot` をクリックすると、最新の Hermes Gateway 中断機構（世代管理・リーストークン破棄）と連動して `session.stop` を発行し、ハングしたバックエンドのスロット枠を物理的に即時解放します。
+* スロットに空きがあるかアイドル中のエージェントが存在する場合は、`Switch ➔` または `Open` ボタンからスムーズに目的のエージェントへと遷移します。
 
 ---
 

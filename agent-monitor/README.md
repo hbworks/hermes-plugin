@@ -1,5 +1,66 @@
 # Hermes Desktop - Agent Activity Monitor Plugin
 
+[ English | [日本語](#japanese) ]
+
+A desktop plugin for Hermes Desktop to visualize, inspect, and monitor AI agent reasoning and tool activity in real time.
+
+---
+
+## 🌟 Key Features
+
+1. **Real-time Inference Visualization**
+   - Monitors whether each agent/session is currently active ("Thinking / Running") or "Idle".
+   - Displays a live elapsed time counter since inference began.
+2. **Gateway Live Event Stream**
+   - Streams incoming Gateway events (thinking blocks, tool invocations, outgoing messages) in real time.
+   - Provides filtering controls ("All" vs "Inference & Tools") and log clearing.
+3. **Pane & Route Dual-View**
+   - Dockable as a persistent right-hand sidebar pane (Width: `320px`, opened by default).
+   - Also accessible via `/agent-monitor` route for dedicated full-screen monitoring.
+
+---
+
+## 🚀 Installation
+
+Place the folder into the Hermes Desktop plugins directory `~/.hermes/desktop-plugins/`.
+
+### Option A: Copy Files
+
+```bash
+mkdir -p ~/.hermes/desktop-plugins
+cp -r ./agent-monitor ~/.hermes/desktop-plugins/
+```
+
+### Option B: Symbolic Link (Recommended for Development)
+
+```bash
+mkdir -p ~/.hermes/desktop-plugins
+ln -s "$(pwd)/agent-monitor" ~/.hermes/desktop-plugins/agent-monitor
+```
+
+> [!NOTE]
+> - Hermes Desktop supports hot-reloading and will detect the plugin immediately.
+> - If the panel does not show up, go to **Settings → Plugins** to ensure `Agent Activity Monitor` is enabled.
+
+---
+
+## 📁 Directory Structure
+
+```text
+agent-monitor/
+├── plugin.js       # Plugin implementation (ESM / @hermes/plugin-sdk)
+└── README.md       # Documentation
+```
+
+<br>
+
+---
+<a id="japanese"></a>
+
+# Hermes Desktop - Agent Activity Monitor Plugin (日本語)
+
+[ [English](#hermes-desktop---agent-activity-monitor-plugin) | 日本語 ]
+
 Hermes Desktop のボットモード等で各AIエージェントが推論・実行している間の状態をリアルタイムに可視化・監視するためのデスクトッププラグインです。
 
 ---
