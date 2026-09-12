@@ -18,6 +18,10 @@ Rather than chasing an exhaustive list of features or unnecessary algorithmic co
    - Instead of 20+ peripheral plugins that clutter the environment, we concentrate exclusively on solving the fatal pain points every Hermes operator encounters: credential exposure, desktop profile-switch lockups, and heavyweight DB overhead.
 3. **Fast-path & Deterministic Reliability**
    - We prioritize fast, predictable, rule-based heuristics over expensive multi-turn LLM loops for routine operational tasks. Fixes run in milliseconds with **zero token cost**.
+4. **Defense in Depth at the I/O Boundary**
+   - Credential Safety doesn't just match known token formats (what `core/redact.py` does). It catches **natural-language meta-discussion** — when an agent says *"I changed the password from `sk-abc...` to `sk-xyz...`"* — using Shannon entropy analysis, character-class verification, and placeholder detection to avoid false positives. This directly solves the systemic failure reported in [GitHub Issue #20785](https://github.com/NousResearch/hermes-agent/issues/20785) where the core redactor's regex-only approach consistently misses secrets embedded in explanations.
+5. **Transparent Observability over Black-box Evolution**
+   - Where others use opaque DSPy+GEPA pipelines (offline, GPU-heavy, hours-long), our WikiSkill Evolution provides **instant, deterministic, auditable** skill patches triggered by real tool errors — no LLM calls, no token cost, full git traceability.
 
 ---
 
@@ -185,6 +189,10 @@ Hermes AI エージェント（[Hermes Agent](https://github.com/NousResearch/he
    - 雑多な周辺プラグインを増やして肥大化させるのではなく、Hermes 運用で誰もが直面する致命的な痛み（認証情報漏洩、スロット枯渇/フリーズ、重い外部DB不要の記憶管理）に極限まで集中しています。
 3. **Fast-path & Deterministic（即効性・決定論的アプローチ）**
    - 過剰に重い機械学習モデルや反復的な LLM 呼び出しに頼らず、予測可能で高速・安全なヒューリスティック制御を採用。余計な API コストを発生させず、ミリ秒単位で現場のエラーを解決します。
+4. **I/O 境界での多層防御（Defense in Depth）**
+   - Credential Safety は、既知のトークン形式マッチング（`core/redact.py` の正規表現）だけではすり抜けてしまう **自然言語中のメタディスカッション** を捕捉します。エージェントが「パスワードを `sk-abc...` から `sk-xyz...` に変更しました」と説明する際に漏洩する秘密情報を、シャノンエントロピー分析・文字クラス検証・プレースホルダー検出の組み合わせで検出し、誤検知なくブロックします。これは [GitHub Issue #20785](https://github.com/NousResearch/hermes-agent/issues/20785) で報告された、コアのリダクター（redactor）だけでは防げない構造的課題を根本から解決します。
+5. **ブラックボックスを排した、透明で監査可能な自己進化**
+   - DSPy+GEPA パイプライン（オフライン・GPU必須・数時間の学習）を用いる公式 self-evolution とは異なり、当プラグインの WikiSkill Evolution は、**即時・決定論的・高い監査性** を備えたスキルパッチを提供します。実際のツールエラーをトリガーとして動作し、LLM 呼び出し不要、トークンコストゼロ、完全な git トレーサビリティを実現します。
 
 ---
 
