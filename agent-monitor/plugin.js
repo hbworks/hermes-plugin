@@ -65,9 +65,16 @@ if (typeof window !== 'undefined' && !window.__hermes_prewarm_blocked_v2) {
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
 const getLocale = () => {
-  if (typeof navigator === 'undefined') return 'en';
-  return (navigator.language || navigator.userLanguage || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
-};
+  if (typeof document !== 'undefined') {
+    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang')
+    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja'
+  }
+  if (typeof navigator !== 'undefined') {
+    const langs = navigator.languages || [navigator.language || navigator.userLanguage || '']
+    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
+  }
+  return 'en'
+}
 
 const I18N = {
   ja: {
