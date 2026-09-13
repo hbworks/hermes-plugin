@@ -88,6 +88,23 @@ class TestWikiSkillEvolution(unittest.TestCase):
         restarted = WikiSkillEvolutionPlugin()
         self.assertEqual(len(restarted._read_error_log(hours=6)), 1)
 
+    def test_persisted_timestamp_is_timezone_aware(self):
+        self.plugin.on_post_tool_call(tool_name="bash", error="ImportError: missing mod")
+        record = json.loads((self.hermes_home / "logs" / "evolution_errors.jsonl").read_text(encoding="utf-8"))
+        self.assertIsNotNone(datetime.datetime.fromisoformat(record["ts"]).tzinfo)
+
+    def test_pending_errors_are_bounded(self):
+        import main
+
+        original_persist = self.plugin._persist_error
+        try:
+            self.plugin._persist_error = lambda record: False
+            for i in range(main.MAX_PENDING_ERRORS + 10):
+                self.plugin.on_post_tool_call(tool_name="bash", error=f"error-{i}")
+            self.assertEqual(len(self.plugin._pending_errors), main.MAX_PENDING_ERRORS)
+        finally:
+            self.plugin._persist_error = original_persist
+
     def test_error_log_is_scoped_to_active_profile(self):
         """Should store logs below the active profile directory."""
         profile_dir = self.hermes_home / "profiles" / "coding"
@@ -178,6 +195,14 @@ class TestWikiSkillEvolution(unittest.TestCase):
         # File content should remain unchanged
         content = skill_file.read_text(encoding="utf-8")
         self.assertNotIn("依存ライブラリ", content)
+
+    def test_run_cycle_dry_run_does_not_create_missing_skill(self):
+        self.plugin.on_post_tool_call(tool_name="bash", error="ImportError: missing mod")
+
+        res = self.plugin.run_cycle(skill_name="new_skill", dry_run=True)
+
+        self.assertEqual(res["status"], "dry_run")
+        self.assertFalse((self.hermes_home / "skills" / "new_skill" / "SKILL.md").exists())
 
 
 if __name__ == "__main__":
