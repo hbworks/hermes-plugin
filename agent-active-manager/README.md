@@ -28,7 +28,7 @@ However, several architectural constraints often led to frustrating profile-swit
 * One-click idle expiration presets (`2m` / `5m` / `10m`) to quickly adjust LRU retirement timing.
 
 ### 2. Backend Force Stop & Slot Liberation
-* Dedicated `↺ Reset & Free Slot` button per agent to explicitly send `session.stop` (`abort: true`) with exact runtime session IDs, immediately freeing occupied backend slots.
+* When an agent task runs for 120 seconds or longer (suspected freeze or deadlock), an emergency `↺ Reset & Free Slot` button appears to explicitly send `session.stop` (`abort: true`) with exact runtime session IDs, immediately freeing occupied backend slots.
 * Global `↺ Reset All` button to parallelly terminate all busy sessions when a deadlock occurs.
 
 ### 3. Recent Inference History Tracking
@@ -127,7 +127,7 @@ Hermes Desktop は複数のエージェントを高速に切り替えるため�
 * アイドル自動解放時間（`idleMs`）をワンクリック（`2m` / `5m` / `10m`）で即座に変更可能。
 
 ### 2. バックエンド強制停止 ＆ スロット即時解放
-* エージェントごとの `↺ Reset & Free Slot` ボタンにより、対象のランタイムセッションIDを明示して `session.stop`（`abort: true`）を発行し、占有されたスロットを確実に解放。
+* エージェントのタスク・推論が120秒以上継続した場合（フリーズ・スタック疑い）にのみ非常停止用 `↺ 強制停止 & 解放` ボタンが出現し、対象のランタイムセッションIDを明示して `session.stop`（`abort: true`）を発行、占有されたスロットを確実に解放。
 * 全エージェントがビジー状態の際に一括で停止・解放を行う `↺ Reset All` ボタンを装備。
 
 ### 3. 直前の推論履歴の追跡
