@@ -11,7 +11,6 @@ import React, { useState, useEffect, useRef } from 'react';
  */
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
-/**
 const t = {
   activeSuffix: 'Active',
   filterAll: 'All',
@@ -29,11 +28,11 @@ const t = {
  * ステータス別の表示設定（色、アイコン、ラベル）
  */
 const getStatusConfig = () => ({
-  thinking:       { color: '#8b5cf6', icon: '●',  pulse: '#8b5cf6', label: (e) => t.statusThinking(e) },
-  tool_start:     { color: '#f59e0b', icon: '🚀', pulse: '#f59e0b', label: (_, tool) => t.statusToolStart(tool) },
-  tool:           { color: '#8b5cf6', icon: '⚡', pulse: '#8b5cf6', label: (e, tool) => t.statusToolRunning(e, tool) },
+  thinking: { color: '#8b5cf6', icon: '●', pulse: '#8b5cf6', label: (e) => t.statusThinking(e) },
+  tool_start: { color: '#f59e0b', icon: '🚀', pulse: '#f59e0b', label: (_, tool) => t.statusToolStart(tool) },
+  tool: { color: '#8b5cf6', icon: '⚡', pulse: '#8b5cf6', label: (e, tool) => t.statusToolRunning(e, tool) },
   tool_completed: { color: '#10b981', icon: '✅', pulse: '#10b981', label: (e, tool, d) => t.statusToolDone(e, tool, d) },
-  generating:     { color: '#3b82f6', icon: '✍️', pulse: '#3b82f6', label: (e) => t.statusGenerating(e) }
+  generating: { color: '#3b82f6', icon: '✍️', pulse: '#3b82f6', label: (e) => t.statusGenerating(e) }
 });
 
 /**
@@ -241,7 +240,7 @@ function useAgentMonitorState() {
                 if (assetRes?.found && assetRes?.data && isMounted) {
                   setBotAvatars((prev) => ({ ...prev, [botName]: assetRes.data }));
                 }
-              }).catch(() => {});
+              }).catch(() => { });
           }
 
           // profiles.list のメタデータから直接取得（バックエンドを起動させない）
@@ -275,7 +274,7 @@ function useAgentMonitorState() {
               sessionBotMapRef.current[sId] = String(sProf).toLowerCase();
             }
           }
-        } catch (_) {}
+        } catch (_) { }
 
         if (focusedSidRef.current && focusedProfileRef.current) {
           sessionBotMapRef.current[focusedSidRef.current] = focusedProfileRef.current;
@@ -474,8 +473,8 @@ function useAgentMonitorState() {
       const targetBot = botName || 'default';
       const matched = (rosterRef.current || []).find((p) => p.name === targetBot);
       let targetSessionId = matched?.canonical_session?.resolved_id || matched?.canonical_session?.id ||
-                            matched?.last_session?.resolved_id || matched?.last_session?.id ||
-                            botStates[targetBot]?.lastSessionId;
+        matched?.last_session?.resolved_id || matched?.last_session?.id ||
+        botStates[targetBot]?.lastSessionId;
 
       // 複数接続環境対応: host.profileRoutes() は Promise を返すため await して取得
       const routes = typeof host?.profileRoutes === 'function'
@@ -507,7 +506,7 @@ function useAgentMonitorState() {
 
       if (targetSessionId) {
         if (typeof host?.ensureAgent === 'function') {
-          await host.ensureAgent(targetConnId, targetProfileName).catch(() => {});
+          await host.ensureAgent(targetConnId, targetProfileName).catch(() => { });
         }
         if (typeof host?.openSession === 'function') {
           try {
@@ -518,7 +517,7 @@ function useAgentMonitorState() {
               awaitHydration: false
             });
             return;
-          } catch (_) {}
+          } catch (_) { }
         }
         if (typeof host?.switchSession === 'function') {
           try {
@@ -529,12 +528,12 @@ function useAgentMonitorState() {
               connectionId: targetConnId || undefined
             });
             return;
-          } catch (_) {}
+          } catch (_) { }
         }
         if (typeof host?.navigate === 'function') host.navigate(`/${targetSessionId}`);
         else if (typeof window !== 'undefined') window.location.hash = `#/${targetSessionId}`;
       } else {
-        if (typeof host?.ensureAgent === 'function') await host.ensureAgent(targetConnId, targetProfileName).catch(() => {});
+        if (typeof host?.ensureAgent === 'function') await host.ensureAgent(targetConnId, targetProfileName).catch(() => { });
         if (typeof host?.navigate === 'function') host.navigate('/');
         else if (typeof window !== 'undefined') window.location.hash = '#/';
       }
@@ -934,8 +933,8 @@ export default {
     return typeof ctx.registerMany === 'function'
       ? ctx.registerMany(entries)
       : (() => {
-          const disposers = entries.map((e) => ctx.register(e));
-          return () => disposers.forEach((d) => typeof d === 'function' && d());
-        })();
+        const disposers = entries.map((e) => ctx.register(e));
+        return () => disposers.forEach((d) => typeof d === 'function' && d());
+      })();
   }
 };
