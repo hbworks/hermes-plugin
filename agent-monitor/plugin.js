@@ -2,21 +2,33 @@ import { host, useValue, PANES_AREA, ROUTES_AREA } from '@hermes/plugin-sdk';
 import { jsx, jsxs } from 'react/jsx-runtime';
 import React, { useState, useEffect, useRef } from 'react';
 
-// --- 共通ヘルパー & 設定 ---
+// =============================================================================
+// 1. 基盤・定義層 (Foundations & Utilities)
+// =============================================================================
+
+/**
+ * 文字列が候補リストのいずれかを含むかを判定
+ */
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
+/**
+ * UIのロケールを取得 (ja または en)
+ */
 const getLocale = () => {
   if (typeof document !== 'undefined') {
-    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang')
-    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja'
+    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang');
+    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja';
   }
   if (typeof navigator !== 'undefined') {
-    const langs = navigator.languages || [navigator.language || navigator.userLanguage || '']
-    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
+    const langs = navigator.languages || [navigator.language || navigator.userLanguage || ''];
+    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja';
   }
-  return 'en'
-}
+  return 'en';
+};
 
+/**
+ * 国際化辞書
+ */
 const I18N = {
   ja: {
     activeSuffix: '稼働中',
@@ -44,6 +56,9 @@ const I18N = {
   }
 };
 
+/**
+ * ステータス別の表示設定（色、アイコン、ラベル）
+ */
 const getStatusConfig = () => {
   const loc = getLocale();
   const t = I18N[loc] || I18N.en;
@@ -56,6 +71,9 @@ const getStatusConfig = () => {
   };
 };
 
+/**
+ * アクティビティ種別に応じたメタ情報（アイコン、色）
+ */
 const getActivityTypeMeta = (type) => {
   const t = (type || '').toLowerCase();
   if (matchAny(t, ['tool_result', 'tool.result', 'tool_output'])) return { icon: '✅', color: '#10b981' };
@@ -65,6 +83,9 @@ const getActivityTypeMeta = (type) => {
   return { icon: '💬', color: '#3b82f6' };
 };
 
+/**
+ * 受信イベントから対象プロファイル名を抽出
+ */
 const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
   const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
 
@@ -111,7 +132,11 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
   return '';
 };
 
-// --- 共通スタイル ---
+const AVATAR_COLORS = ['#6366f1', '#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'];
+
+/**
+ * 共通スタイル定義
+ */
 const S = {
   pane: {
     display: 'flex',
@@ -177,15 +202,22 @@ const S = {
     fontSize: '10px',
     fontWeight: active ? '600' : '500',
     cursor: 'pointer'
-  })
+  }),
+  separator: {
+    height: '1px',
+    background: 'rgba(0, 0, 0, 0.06)',
+    margin: '8px 12px'
+  }
 };
 
-const AVATAR_COLORS = ['#6366f1', '#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'];
+// =============================================================================
+// 2. ロジック層 (Custom Hook)
+// =============================================================================
 
 /**
- * Agent Activity Monitor コンポーネント
+ * エージェントの活動監視状態を統括するカスタムフック
  */
-function AgentActivityPane() {
+function useAgentMonitorState() {
   const busyBySession = useValue(host.state.busyBySession) || {};
   const focusedProfileAtom = host.state.focusedSessionProfile || host.state.profile;
   const focusedProfileName = useValue(focusedProfileAtom) || 'default';
@@ -205,12 +237,14 @@ function AgentActivityPane() {
   const agentStatusMapRef = useRef({});
   const rosterRef = useRef([]);
   const sessionBotMapRef = useRef({});
+  const busyBySessionRef = useRef(busyBySession);
+  busyBySessionRef.current = busyBySession;
   const focusedProfileRef = useRef(focusedProfileName);
   focusedProfileRef.current = focusedProfileName;
   const focusedSidRef = useRef(focusedSessionId);
   focusedSidRef.current = focusedSessionId;
 
-  // 1. プロファイル一覧・アバター・セッションの同期
+  // 1. プロファイル一覧・アバター・セッションの同期 (4秒ポーリング)
   useEffect(() => {
     let isMounted = true;
 
@@ -296,6 +330,7 @@ function AgentActivityPane() {
     const interval = setInterval(() => {
       const now = Date.now();
       const nextTimers = {};
+      const curBusyBySession = busyBySessionRef.current;
 
       for (const bot of roster) {
         const botName = bot.name;
@@ -305,8 +340,8 @@ function AgentActivityPane() {
 
         const isToolCompleted = curStatus?.status === 'tool_completed' && (now - (curStatus.completedAt || 0) < 3000);
         const eventBusy = (now - lastActive < 15000) && Boolean(curStatus) && !curStatus.isFinished;
-        const runtimeSessBusy = Object.entries(sessionBotMapRef.current).some(([sid, b]) => b === botName && Boolean(busyBySession[sid]));
-        const directSessBusy = runtimeSessBusy || ((!bState.isTeam && bState.lastSessionId) ? Boolean(busyBySession[bState.lastSessionId]) : false);
+        const runtimeSessBusy = Object.entries(sessionBotMapRef.current).some(([sid, b]) => b === botName && Boolean(curBusyBySession[sid]));
+        const directSessBusy = runtimeSessBusy || ((!bState.isTeam && bState.lastSessionId) ? Boolean(curBusyBySession[bState.lastSessionId]) : false);
 
         if (isToolCompleted) {
           nextTimers[botName] = {
@@ -341,7 +376,7 @@ function AgentActivityPane() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [roster, botStates, busyBySession]);
+  }, [roster, botStates]);
 
   // 3. Gateway イベントのリアルタイム購読
   useEffect(() => {
@@ -518,11 +553,9 @@ function AgentActivityPane() {
       }
 
       if (targetSessionId) {
-        // 公式仕様: host.ensureAgent(connectionId, profile) - route 由来の connectionId と source profile を指定
         if (typeof host?.ensureAgent === 'function') {
           await host.ensureAgent(targetConnId, targetProfileName).catch(() => {});
         }
-        // 公式仕様: route-aware な session.open
         if (typeof host?.openSession === 'function') {
           try {
             await host.openSession(targetSessionId, {
@@ -558,226 +591,371 @@ function AgentActivityPane() {
   };
 
   const activeCount = Object.keys(timers).length;
+
   const filteredActivities = activities.filter((act) => {
     if (filter === 'all') return true;
     if (filter === 'busy') return matchAny(act.type?.toLowerCase() || '', ['think', 'reason', 'tool', 'run', 'step', 'turn', 'delta', 'stream']);
     return act.type?.toLowerCase().includes(filter);
   });
 
+  const clearActivities = () => setActivities([]);
+
+  return {
+    roster,
+    botAvatars,
+    botStates,
+    timers,
+    activeCount,
+    hoveredBot,
+    setHoveredBot,
+    filter,
+    setFilter,
+    filteredActivities,
+    clearActivities,
+    handleAgentClick,
+    focusedProfileName
+  };
+}
+
+// =============================================================================
+// 3. UI部品層 (Presentational Components)
+// =============================================================================
+
+/**
+ * モニターヘッダー（稼働数インジケーター）
+ */
+function MonitorHeader({ activeCount }) {
+  const loc = getLocale();
+  const t = I18N[loc] || I18N.en;
+
+  return jsxs('div', {
+    style: { ...S.flexBetween, ...S.sectionHeader },
+    children: [
+      jsxs('div', {
+        style: { ...S.flexRow, gap: '6px' },
+        children: [
+          jsx('span', {
+            style: {
+              width: '7px',
+              height: '7px',
+              borderRadius: '50%',
+              backgroundColor: activeCount > 0 ? '#10b981' : '#c7c7cc',
+              boxShadow: activeCount > 0 ? '0 0 6px rgba(16, 185, 129, 0.6)' : 'none'
+            }
+          }),
+          jsx('span', { children: 'AGENT ACTIVITY' })
+        ]
+      }),
+      jsx('span', {
+        style: { fontSize: '10px', fontWeight: '500', color: activeCount > 0 ? '#10b981' : '#8e8e93' },
+        children: activeCount > 0 ? `${activeCount} ${t.activeSuffix}` : 'Idle'
+      })
+    ]
+  });
+}
+
+/**
+ * 単一エージェントカード
+ */
+function AgentCard({
+  bot,
+  index,
+  timerInfo,
+  isFocused,
+  isHovered,
+  avatarImg,
+  bState,
+  onClick,
+  onMouseEnter,
+  onMouseLeave
+}) {
+  const botName = bot.name;
+  const isBusy = Boolean(timerInfo);
+  const elapsed = timerInfo?.elapsed || 0;
+  const statusType = timerInfo?.status || 'idle';
+  const STATUS_CONFIG = getStatusConfig();
+  const cfg = STATUS_CONFIG[statusType];
+
+  let displayName = bot.display_name || bot.name || 'Agent';
+  displayName = displayName.toLowerCase() === 'default' ? 'Hermes' : displayName.charAt(0).toUpperCase() + displayName.slice(1);
+
+  const rawModel = bState.model || bot.model || '';
+  const parts = rawModel.split('/');
+  const providerName = bState.provider || (parts.length > 1 ? parts[0] : '');
+  const modelName = (parts.length > 1 ? parts[parts.length - 1] : rawModel).replace(/:free$/i, '');
+
+  const avatarBg = AVATAR_COLORS[index % AVATAR_COLORS.length];
+  const pulseColor = cfg?.pulse || avatarBg;
+  const statusLabel = cfg ? cfg.label(elapsed, timerInfo?.toolName, timerInfo?.duration) : '';
+
+  return jsxs('div', {
+    onClick,
+    onMouseEnter,
+    onMouseLeave,
+    title: `${displayName} (${providerName ? providerName + '/' : ''}${modelName || 'default'})`,
+    style: S.card(isFocused, isHovered),
+    children: [
+      // 1行目: アバター + 指示元バッジ + ピン留め + タイマー
+      jsxs('div', {
+        style: { ...S.flexBetween, gap: '5px' },
+        children: [
+          jsxs('div', {
+            style: { ...S.flexRow, gap: '5px' },
+            children: [
+              jsxs('div', {
+                style: {
+                  position: 'relative',
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '50%',
+                  background: isBusy ? pulseColor : avatarBg,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#fff',
+                  fontWeight: '600',
+                  fontSize: '10px',
+                  flexShrink: 0
+                },
+                children: [
+                  avatarImg
+                    ? jsx('img', { src: avatarImg, alt: displayName, style: { width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' } })
+                    : jsx('span', { children: isBusy ? (cfg?.icon || '⚡') : (displayName.charAt(0).toUpperCase()) }),
+                  jsx('span', {
+                    style: {
+                      position: 'absolute',
+                      bottom: '-1px',
+                      right: '-1px',
+                      width: '7px',
+                      height: '7px',
+                      borderRadius: '50%',
+                      backgroundColor: isBusy ? pulseColor : '#c7c7cc',
+                      border: '1.5px solid #ffffff',
+                      boxShadow: isBusy ? `0 0 5px ${pulseColor}` : 'none'
+                    }
+                  })
+                ]
+              }),
+              jsx('span', {
+                style: {
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#1c1c1e',
+                  maxWidth: '75px',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                },
+                children: displayName
+              }),
+              jsx('span', {
+                style: S.tag(
+                  bState.isTeam ? 'rgba(139, 92, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                  bState.isTeam ? '#8b5cf6' : '#10b981'
+                ),
+                children: bState.isTeam ? 'Team' : 'Direct'
+              }),
+              isFocused && jsx('span', { style: { fontSize: '10px' }, children: '📌' })
+            ]
+          }),
+          jsx('span', {
+            style: {
+              fontSize: '9px',
+              color: isBusy ? cfg?.color : '#8e8e93',
+              fontWeight: isBusy ? '600' : '400',
+              padding: isBusy ? '1px 4px' : '0',
+              borderRadius: '3px',
+              backgroundColor: isBusy ? 'rgba(0, 0, 0, 0.05)' : 'transparent'
+            },
+            children: isBusy ? `${elapsed}s` : 'idle'
+          })
+        ]
+      }),
+
+      // 2行目: ステータスラベル
+      statusLabel && jsx('div', {
+        style: { fontSize: '10px', color: cfg?.color, fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+        children: statusLabel
+      }),
+
+      // 3行目: プロバイダー & モデル
+      jsxs('div', {
+        style: { ...S.flexRow, gap: '3px', flexWrap: 'wrap', marginTop: '1px' },
+        children: [
+          providerName && jsx('span', { style: S.tag('rgba(0, 0, 0, 0.05)', '#5c5c60'), children: providerName }),
+          modelName && jsx('span', { style: S.tag('rgba(99, 102, 241, 0.08)', '#6366f1'), children: modelName })
+        ]
+      })
+    ]
+  });
+}
+
+/**
+ * エージェント一覧グリッド
+ */
+function AgentBubbleGrid({
+  roster,
+  timers,
+  botStates,
+  botAvatars,
+  focusedProfileName,
+  hoveredBot,
+  setHoveredBot,
+  onAgentClick
+}) {
+  return jsx('div', {
+    style: S.grid,
+    children: roster.map((bot, index) => {
+      const botName = bot.name;
+      return jsx(AgentCard, {
+        key: botName,
+        bot,
+        index,
+        timerInfo: timers[botName],
+        isFocused: focusedProfileName === botName,
+        isHovered: hoveredBot === botName,
+        avatarImg: botAvatars[botName],
+        bState: botStates[botName] || {},
+        onClick: () => onAgentClick(botName),
+        onMouseEnter: () => setHoveredBot(botName),
+        onMouseLeave: () => setHoveredBot(null)
+      });
+    })
+  });
+}
+
+/**
+ * ライブイベントヘッダー（フィルター＆クリアボタン）
+ */
+function LiveEventsHeader({ filter, setFilter, onClear }) {
+  const loc = getLocale();
+  const t = I18N[loc] || I18N.en;
+
+  return jsxs('div', {
+    style: { ...S.flexBetween, padding: '4px 14px 6px 14px' },
+    children: [
+      jsx('span', { style: { fontSize: '11px', fontWeight: '700', color: '#8e8e93', letterSpacing: '0.06em' }, children: 'LIVE EVENTS' }),
+      jsxs('div', {
+        style: { ...S.flexRow, gap: '4px' },
+        children: [
+          jsx('button', { onClick: () => setFilter('all'), style: S.filterBtn(filter === 'all'), children: t.filterAll }),
+          jsx('button', { onClick: () => setFilter('busy'), style: S.filterBtn(filter === 'busy'), children: t.filterBusy }),
+          jsx('button', { onClick: onClear, style: { background: 'transparent', color: '#c7c7cc', border: 'none', padding: '2px 4px', fontSize: '10px', cursor: 'pointer' }, children: '✕' })
+        ]
+      })
+    ]
+  });
+}
+
+/**
+ * 単一アクティビティアイテム
+ */
+function ActivityItem({ act }) {
+  const meta = getActivityTypeMeta(act.type);
+
+  return jsxs('div', {
+    style: { padding: '7px 9px', borderRadius: '6px', background: 'rgba(0, 0, 0, 0.03)', border: '1px solid rgba(0, 0, 0, 0.05)', fontSize: '11px' },
+    children: [
+      jsxs('div', {
+        style: { ...S.flexBetween, marginBottom: '4px' },
+        children: [
+          jsxs('span', {
+            style: { fontWeight: '600', fontSize: '10px', color: meta.color, ...S.flexRow, gap: '4px' },
+            children: [jsx('span', { children: meta.icon }), act.type]
+          }),
+          jsx('span', { style: { color: '#8e8e93', fontSize: '9px' }, children: act.time })
+        ]
+      }),
+      jsx('div', {
+        style: { margin: 0, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace', fontSize: '11px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#2c2c2e', lineHeight: '1.4' },
+        children: act.detail
+      })
+    ]
+  });
+}
+
+/**
+ * アクティビティログ一覧
+ */
+function ActivityLogList({ activities }) {
+  const loc = getLocale();
+  const t = I18N[loc] || I18N.en;
+
+  if (activities.length === 0) {
+    return jsx('div', {
+      style: { flex: 1, overflowY: 'auto', padding: '4px 10px', display: 'flex', flexDirection: 'column', gap: '6px' },
+      children: jsxs('div', {
+        style: { color: '#8e8e93', fontSize: '11px', textAlign: 'center', padding: '28px 16px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' },
+        children: [
+          jsx('span', { style: { fontSize: '18px' }, children: '📡' }),
+          jsx('span', { style: { fontWeight: '500' }, children: t.waitingTitle }),
+          jsx('span', { style: { fontSize: '10px', color: '#aeaeaf', lineHeight: '1.4' }, children: t.waitingDesc })
+        ]
+      })
+    });
+  }
+
+  return jsx('div', {
+    style: { flex: 1, overflowY: 'auto', padding: '4px 10px', display: 'flex', flexDirection: 'column', gap: '6px' },
+    children: activities.map((act) => jsx(ActivityItem, { key: act.id, act }))
+  });
+}
+
+// =============================================================================
+// 4. メインエントリー (Container & Plugin Registration)
+// =============================================================================
+
+/**
+ * Agent Activity Monitor メインコンポーネント
+ */
+function AgentActivityPane() {
+  const {
+    roster,
+    botAvatars,
+    botStates,
+    timers,
+    activeCount,
+    hoveredBot,
+    setHoveredBot,
+    filter,
+    setFilter,
+    filteredActivities,
+    clearActivities,
+    handleAgentClick,
+    focusedProfileName
+  } = useAgentMonitorState();
+
   return jsxs('div', {
     style: S.pane,
     children: [
       // 1. セクションヘッダー
-      jsxs('div', {
-        style: { ...S.flexBetween, ...S.sectionHeader },
-        children: [
-          jsxs('div', {
-            style: { ...S.flexRow, gap: '6px' },
-            children: [
-              jsx('span', {
-                style: {
-                  width: '7px',
-                  height: '7px',
-                  borderRadius: '50%',
-                  backgroundColor: activeCount > 0 ? '#10b981' : '#c7c7cc',
-                  boxShadow: activeCount > 0 ? '0 0 6px rgba(16, 185, 129, 0.6)' : 'none'
-                }
-              }),
-              jsx('span', { children: 'AGENT ACTIVITY' })
-            ]
-          }),
-          jsx('span', {
-            style: { fontSize: '10px', fontWeight: '500', color: activeCount > 0 ? '#10b981' : '#8e8e93' },
-            children: activeCount > 0 ? `${activeCount} ${I18N[getLocale()]?.activeSuffix || 'Active'}` : 'Idle'
-          })
-        ]
-      }),
+      jsx(MonitorHeader, { activeCount }),
 
       // 2. エージェント一覧（2カラムグリッド）
-      jsx('div', {
-        style: S.grid,
-        children: roster.map((bot, index) => {
-          const botName = bot.name;
-          const timerInfo = timers[botName];
-          const isBusy = Boolean(timerInfo);
-          const elapsed = timerInfo?.elapsed || 0;
-          const statusType = timerInfo?.status || 'idle';
-          const STATUS_CONFIG = getStatusConfig();
-          const cfg = STATUS_CONFIG[statusType];
-          const isFocused = focusedProfileName === botName;
-          const bState = botStates[botName] || {};
-
-          let displayName = bot.display_name || bot.name || 'Agent';
-          displayName = displayName.toLowerCase() === 'default' ? 'Hermes' : displayName.charAt(0).toUpperCase() + displayName.slice(1);
-
-          const rawModel = bState.model || bot.model || '';
-          const parts = rawModel.split('/');
-          const providerName = bState.provider || (parts.length > 1 ? parts[0] : '');
-          const modelName = (parts.length > 1 ? parts[parts.length - 1] : rawModel).replace(/:free$/i, '');
-
-          const avatarImg = botAvatars[botName];
-          const avatarBg = AVATAR_COLORS[index % AVATAR_COLORS.length];
-          const pulseColor = cfg?.pulse || avatarBg;
-          const statusLabel = cfg ? cfg.label(elapsed, timerInfo?.toolName, timerInfo?.duration) : '';
-
-          return jsxs('div', {
-            key: botName,
-            onClick: () => handleAgentClick(botName),
-            onMouseEnter: () => setHoveredBot(botName),
-            onMouseLeave: () => setHoveredBot(null),
-            title: `${displayName} (${providerName ? providerName + '/' : ''}${modelName || 'default'})`,
-            style: S.card(isFocused, hoveredBot === botName),
-            children: [
-              // 1行目: アバター + 指示元バッジ + ピン留め + タイマー
-              jsxs('div', {
-                style: { ...S.flexBetween, gap: '5px' },
-                children: [
-                  jsxs('div', {
-                    style: { ...S.flexRow, gap: '5px' },
-                    children: [
-                      jsxs('div', {
-                        style: {
-                          position: 'relative',
-                          width: '24px',
-                          height: '24px',
-                          borderRadius: '50%',
-                          background: isBusy ? pulseColor : avatarBg,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: '#fff',
-                          fontWeight: '600',
-                          fontSize: '10px',
-                          flexShrink: 0
-                        },
-                        children: [
-                          avatarImg
-                            ? jsx('img', { src: avatarImg, alt: displayName, style: { width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' } })
-                            : jsx('span', { children: isBusy ? (cfg?.icon || '⚡') : (displayName.charAt(0).toUpperCase()) }),
-                          jsx('span', {
-                            style: {
-                              position: 'absolute',
-                              bottom: '-1px',
-                              right: '-1px',
-                              width: '7px',
-                              height: '7px',
-                              borderRadius: '50%',
-                              backgroundColor: isBusy ? pulseColor : '#c7c7cc',
-                              border: '1.5px solid #ffffff',
-                              boxShadow: isBusy ? `0 0 5px ${pulseColor}` : 'none'
-                            }
-                          })
-                        ]
-                      }),
-                      jsx('span', {
-                        style: {
-                          fontSize: '11px',
-                          fontWeight: '600',
-                          color: '#1c1c1e',
-                          maxWidth: '75px',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis'
-                        },
-                        children: displayName
-                      }),
-                      jsx('span', {
-                        style: S.tag(
-                          bState.isTeam ? 'rgba(139, 92, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-                          bState.isTeam ? '#8b5cf6' : '#10b981'
-                        ),
-                        children: bState.isTeam ? 'Team' : 'Direct'
-                      }),
-                      isFocused && jsx('span', { style: { fontSize: '10px' }, children: '📌' })
-                    ]
-                  }),
-                  jsx('span', {
-                    style: {
-                      fontSize: '9px',
-                      color: isBusy ? cfg?.color : '#8e8e93',
-                      fontWeight: isBusy ? '600' : '400',
-                      padding: isBusy ? '1px 4px' : '0',
-                      borderRadius: '3px',
-                      backgroundColor: isBusy ? 'rgba(0, 0, 0, 0.05)' : 'transparent'
-                    },
-                    children: isBusy ? `${elapsed}s` : 'idle'
-                  })
-                ]
-              }),
-
-              // 2行目: ステータスラベル
-              statusLabel && jsx('div', {
-                style: { fontSize: '10px', color: cfg?.color, fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-                children: statusLabel
-              }),
-
-              // 3行目: プロバイダー & モデル
-              jsxs('div', {
-                style: { ...S.flexRow, gap: '3px', flexWrap: 'wrap', marginTop: '1px' },
-                children: [
-                  providerName && jsx('span', { style: S.tag('rgba(0, 0, 0, 0.05)', '#5c5c60'), children: providerName }),
-                  modelName && jsx('span', { style: S.tag('rgba(99, 102, 241, 0.08)', '#6366f1'), children: modelName })
-                ]
-              })
-            ]
-          });
-        })
+      jsx(AgentBubbleGrid, {
+        roster,
+        timers,
+        botStates,
+        botAvatars,
+        focusedProfileName,
+        hoveredBot,
+        setHoveredBot,
+        onAgentClick: handleAgentClick
       }),
 
       // セパレータ
-      jsx('div', { style: { height: '1px', background: 'rgba(0, 0, 0, 0.06)', margin: '8px 12px' } }),
+      jsx('div', { style: S.separator }),
 
       // 3. ログヘッダー
-      jsxs('div', {
-        style: { ...S.flexBetween, padding: '4px 14px 6px 14px' },
-        children: [
-          jsx('span', { style: { fontSize: '11px', fontWeight: '700', color: '#8e8e93', letterSpacing: '0.06em' }, children: 'LIVE EVENTS' }),
-          jsxs('div', {
-            style: { ...S.flexRow, gap: '4px' },
-            children: [
-              jsx('button', { onClick: () => setFilter('all'), style: S.filterBtn(filter === 'all'), children: I18N[getLocale()]?.filterAll || 'All' }),
-              jsx('button', { onClick: () => setFilter('busy'), style: S.filterBtn(filter === 'busy'), children: I18N[getLocale()]?.filterBusy || 'Thinking/Tools' }),
-              jsx('button', { onClick: () => setActivities([]), style: { background: 'transparent', color: '#c7c7cc', border: 'none', padding: '2px 4px', fontSize: '10px', cursor: 'pointer' }, children: '✕' })
-            ]
-          })
-        ]
+      jsx(LiveEventsHeader, {
+        filter,
+        setFilter,
+        onClear: clearActivities
       }),
 
       // 4. ログ一覧
-      jsx('div', {
-        style: { flex: 1, overflowY: 'auto', padding: '4px 10px', display: 'flex', flexDirection: 'column', gap: '6px' },
-        children: filteredActivities.length === 0
-          ? jsxs('div', {
-              style: { color: '#8e8e93', fontSize: '11px', textAlign: 'center', padding: '28px 16px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' },
-              children: [
-                jsx('span', { style: { fontSize: '18px' }, children: '📡' }),
-                jsx('span', { style: { fontWeight: '500' }, children: I18N[getLocale()]?.waitingTitle || 'Waiting for events' }),
-                jsx('span', { style: { fontSize: '10px', color: '#aeaeaf', lineHeight: '1.4' }, children: I18N[getLocale()]?.waitingDesc || 'Real-time logs will appear here' })
-              ]
-            })
-          : filteredActivities.map((act) => {
-              const meta = getActivityTypeMeta(act.type);
-              return jsxs('div', {
-                key: act.id,
-                style: { padding: '7px 9px', borderRadius: '6px', background: 'rgba(0, 0, 0, 0.03)', border: '1px solid rgba(0, 0, 0, 0.05)', fontSize: '11px' },
-                children: [
-                  jsxs('div', {
-                    style: { ...S.flexBetween, marginBottom: '4px' },
-                    children: [
-                      jsxs('span', {
-                        style: { fontWeight: '600', fontSize: '10px', color: meta.color, ...S.flexRow, gap: '4px' },
-                        children: [jsx('span', { children: meta.icon }), act.type]
-                      }),
-                      jsx('span', { style: { color: '#8e8e93', fontSize: '9px' }, children: act.time })
-                    ]
-                  }),
-                  jsx('div', {
-                    style: { margin: 0, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace', fontSize: '11px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#2c2c2e', lineHeight: '1.4' },
-                    children: act.detail
-                  })
-                ]
-              });
-            })
+      jsx(ActivityLogList, {
+        activities: filteredActivities
       })
     ]
   });
