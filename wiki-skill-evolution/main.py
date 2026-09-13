@@ -19,6 +19,17 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "wiki-skill-evolution"
 DEFAULT_SKILL_NAME = "default_skill"
+ERROR_LOG_RELATIVE_PATH = Path("logs") / "evolution_errors.jsonl"
+ERROR_LOG_MAX_BYTES = 5 * 1024 * 1024
+MAX_RECENT_ERRORS = 50
+
+# Tool names are intentionally matched from most-specific to least-specific.
+SKILL_MAPPINGS = {
+    "python_exec": "python",
+    "python_run": "python",
+    "git_": "git_workflow",
+    "git": "git_workflow",
+}
 
 GOLDEN_TASKS = [
     {"goal": "echo hello", "context": ""},
@@ -60,8 +71,7 @@ RUN_EVOLUTION_SCHEMA = {
             "properties": {
                 "skill_name": {
                     "type": "string",
-                    "description": "The skill name to evolve (default 'default_skill').",
-                    "default": DEFAULT_SKILL_NAME,
+                    "description": "The skill name to evolve. If omitted, infer it from the recent error context.",
                 },
                 "hours": {
                     "type": "integer",
@@ -85,27 +95,26 @@ def _now_str() -> str:
 
 def _get_hermes_home_dir() -> Path:
     """Resolve active Hermes home directory respecting active profiles."""
-    if os.environ.get("HERMES_HOME", "").strip():
-        return Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
-
     prof = os.environ.get("HERMES_PROFILE", "").strip()
     if prof:
-        prof_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof}"))
+        hermes_root = Path(os.path.expanduser(os.environ.get("HERMES_HOME", "~/.hermes").strip()))
+        prof_dir = hermes_root / "profiles" / prof
         if prof_dir.exists():
             return prof_dir
 
     try:
-        active_prof = Path(os.path.expanduser("~/.hermes/active_profile"))
+        hermes_root = Path(os.path.expanduser(os.environ.get("HERMES_HOME", "~/.hermes").strip()))
+        active_prof = hermes_root / "active_profile"
         if active_prof.exists():
             prof_name = active_prof.read_text(encoding="utf-8").strip()
             if prof_name:
-                p_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof_name}"))
+                p_dir = hermes_root / "profiles" / prof_name
                 if p_dir.exists():
                     return p_dir
     except Exception:
         pass
 
-    return Path(os.path.expanduser("~/.hermes"))
+    return Path(os.path.expanduser(os.environ.get("HERMES_HOME", "~/.hermes").strip()))
 
 
 def _get_skills_dir() -> Path:
@@ -121,22 +130,138 @@ class WikiSkillEvolutionPlugin:
     def __init__(self, ctx: Optional[Any] = None) -> None:
         self.ctx = ctx
         self.recent_errors: List[Dict[str, Any]] = []
+        self._pending_errors: List[Dict[str, Any]] = []
+
+    def _error_log_path(self) -> Path:
+        """Return the persistent error log path, creating its parent directory."""
+        log_path = _get_hermes_home_dir() / ERROR_LOG_RELATIVE_PATH
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        return log_path
+
+    def _rotate_error_log_if_needed(self, log_path: Path, additional_bytes: int) -> None:
+        """Keep one bounded backup before appending to the JSONL log."""
+        if not log_path.exists() or log_path.stat().st_size + additional_bytes <= ERROR_LOG_MAX_BYTES:
+            return
+        backup_path = log_path.with_suffix(log_path.suffix + ".1")
+        if backup_path.exists():
+            backup_path.unlink()
+        os.replace(log_path, backup_path)
+
+    def _persist_error(self, error_record: Dict[str, Any]) -> bool:
+        """Append one error record and rotate the log when it reaches its size limit."""
+        try:
+            log_path = self._error_log_path()
+            line = json.dumps(error_record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            encoded = line.encode("utf-8")
+            self._rotate_error_log_if_needed(log_path, len(encoded))
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+                handle.flush()
+            return True
+        except OSError as exc:
+            logger.error("[%s] Failed to persist error log: %s", PLUGIN_NAME, exc)
+            return False
+
+    def _flush_pending_errors(self) -> None:
+        """Retry records that could not be written during the tool hook."""
+        pending = list(self._pending_errors)
+        self._pending_errors.clear()
+        for error_record in pending:
+            if not self._persist_error(error_record):
+                self._pending_errors.append(error_record)
+
+    def _read_error_log(self, hours: int) -> List[Dict[str, Any]]:
+        """Read valid error records from the requested lookback window."""
+        cutoff = datetime.datetime.now() - datetime.timedelta(hours=max(0, hours))
+        records: List[Dict[str, Any]] = []
+        log_path = self._error_log_path()
+        log_paths = [log_path, log_path.with_suffix(log_path.suffix + ".1")]
+        for current_path in log_paths:
+            try:
+                handle = current_path.open("r", encoding="utf-8")
+            except FileNotFoundError:
+                continue
+            try:
+                with handle:
+                    for line_number, line in enumerate(handle, start=1):
+                        try:
+                            record = json.loads(line)
+                            timestamp = datetime.datetime.fromisoformat(str(record["ts"]))
+                            if timestamp >= cutoff and isinstance(record, dict):
+                                records.append(record)
+                        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                            logger.warning(
+                                "[%s] Ignoring malformed error log line %d: %s",
+                                PLUGIN_NAME,
+                                line_number,
+                                exc,
+                            )
+            except OSError as exc:
+                logger.error("[%s] Failed to read error log: %s", PLUGIN_NAME, exc)
+        return sorted(records, key=lambda record: str(record.get("ts", "")))
+
+    def _extract_context_value(self, args: Any, keys: tuple[str, ...]) -> str:
+        if isinstance(args, dict):
+            for key in keys:
+                value = args.get(key)
+                if isinstance(value, (str, Path)):
+                    return str(value)
+        return ""
+
+    def _resolve_skill_name(self, tool_name: str, args: Any = None, error: str = "") -> str:
+        """Map tool/command context to a skill, falling back only when unknown."""
+        explicit = self._extract_context_value(args, ("skill_name", "skill"))
+        if explicit:
+            return explicit
+
+        for mapped_tool, skill_name in sorted(SKILL_MAPPINGS.items(), key=lambda item: -len(item[0])):
+            if tool_name == mapped_tool or tool_name.startswith(mapped_tool):
+                if mapped_tool == "python_exec":
+                    context = " ".join(
+                        value for value in (
+                            self._extract_context_value(args, ("command", "cmd", "script", "path")),
+                            error,
+                        ) if value
+                    )
+                    match = re.search(r"(?:skills[/\\])([^/\\\s]+)", context)
+                    if match:
+                        return match.group(1)
+                return skill_name
+
+        context = " ".join(
+            value for value in (
+                self._extract_context_value(args, ("command", "cmd", "script", "path")),
+                error,
+            ) if value
+        )
+        match = re.search(r"(?:skills[/\\])([^/\\\s]+)", context)
+        return match.group(1) if match else DEFAULT_SKILL_NAME
 
     def on_post_tool_call(self, tool_name: str = "", args: Any = None, result: Any = None, error: Any = None, **kwargs: Any) -> None:
         """Hook called after any tool execution in Hermes."""
         if error:
             err_msg = str(error)
-            self.recent_errors.append({
+            context_args: Any = args
+            try:
+                json.dumps(context_args, ensure_ascii=False)
+            except (TypeError, ValueError):
+                context_args = str(args)
+            error_record = {
                 "ts": _now_str(),
                 "tool": tool_name,
                 "error": err_msg,
-            })
+                "args": context_args,
+            }
+            self.recent_errors.append(error_record)
             # 直近50件を保持（メモリ上限管理）
-            self.recent_errors = self.recent_errors[-50:]
+            self.recent_errors = self.recent_errors[-MAX_RECENT_ERRORS:]
+            if not self._persist_error(error_record):
+                self._pending_errors.append(error_record)
             logger.info("[%s] Captured tool error from %s: %s", PLUGIN_NAME, tool_name, err_msg[:100])
 
     def on_session_end(self, session_id: str = "", **kwargs: Any) -> None:
         """Hook called when a session ends."""
+        self._flush_pending_errors()
         if self.recent_errors:
             logger.info("[%s] Session %s ended with %d captured errors. Evaluating evolution...", PLUGIN_NAME, session_id, len(self.recent_errors))
 
@@ -222,8 +347,19 @@ class WikiSkillEvolutionPlugin:
         except Exception:
             return False
 
-    def run_cycle(self, skill_name: str = DEFAULT_SKILL_NAME, hours: int = 6, dry_run: bool = False) -> Dict[str, Any]:
+    def run_cycle(self, skill_name: Optional[str] = None, hours: int = 6, dry_run: bool = False) -> Dict[str, Any]:
         """Execute a full WikiSkill evolution cycle."""
+        self._flush_pending_errors()
+        error_records = self._read_error_log(hours)
+        if not error_records:
+            error_records = list(self.recent_errors)
+        if not skill_name:
+            latest_error = error_records[-1] if error_records else {}
+            skill_name = self._resolve_skill_name(
+                str(latest_error.get("tool", "")),
+                latest_error.get("args"),
+                str(latest_error.get("error", "")),
+            )
         report: Dict[str, Any] = {
             "ts": _now_str(),
             "skill_name": skill_name,
@@ -236,7 +372,7 @@ class WikiSkillEvolutionPlugin:
 
         # 1. 教訓収集
         lessons = list(dict.fromkeys([
-            lesson for err in self.recent_errors
+            lesson for err in error_records
             if (lesson := self._extract_lesson_from_error(err.get("error", "")))
         ]))
 
@@ -296,7 +432,7 @@ class WikiSkillEvolutionPlugin:
         """Handle execution of plugin tools."""
         if tool_name == "run_wiki_skill_evolution":
             result = self.run_cycle(
-                skill_name=args.get("skill_name", DEFAULT_SKILL_NAME),
+                skill_name=args.get("skill_name"),
                 hours=int(args.get("hours", 6)),
                 dry_run=bool(args.get("dry_run", False)),
             )
