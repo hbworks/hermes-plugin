@@ -95,6 +95,10 @@ wiki-skill-evolution/
 
 ## 🚀 Installation & Setup
 
+### Dependencies and Platform
+
+This plugin has no external Python package dependencies and uses only the Python standard library. Log-file locking uses the standard-library `fcntl` module, so the plugin currently targets POSIX systems such as macOS and Linux.
+
 ### 1. Place the Plugin
 
 Install into Hermes Agent's plugin directory `~/.hermes/plugins/`:
@@ -221,6 +225,10 @@ wiki-skill-evolution/
 ---
 
 ## 🚀 インストールと設定
+
+### 依存関係と対応OS
+
+外部Pythonパッケージへの依存はなく、Python標準ライブラリのみで動作します。ログファイルのロックには標準ライブラリの `fcntl` を使用するため、現時点ではmacOSやLinuxなどのPOSIX系OSを対象とします。
 
 ### 1. プラグインの配置
 
