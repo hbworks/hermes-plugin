@@ -3,6 +3,7 @@ import { jsx, jsxs } from 'react/jsx-runtime';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 // --- 1. 共通ヘルパー関数 & 永続化 ---
+const RESET_BUTTON_DELAY_SEC = 120; // 120秒経過で強制停止・解放ボタンを表示
 const LAST_INF_KEY = 'hermes_active_manager_last_inferences_v2';
 const loadStoredInferences = () => {
   try {
@@ -60,7 +61,8 @@ const I18N = {
     decSlot: 'スロット枠を-1減らす',
     slotUnavailable: 'Desktop内部API未接続のため、スロット数は固定（推定3枠）です',
     resetAllTooltip: 'すべてのビジーエージェントの推論停止とステータスリセットを実行',
-    resetSlotTooltip: 'バックエンド推論を強制停止し、スロットを即時解放',
+    resetSlotBtn: '↺ 強制停止 & 解放',
+    resetSlotTooltip: (sec) => `推論・タスクが${sec}秒間継続しています。クリックしてバックエンド推論を強制停止し、スロットを即時解放`,
     resetSlotNotif: (p) => `"${p}" の推論セッションを停止し、スロットを解放しました`,
     resetSlotError: (p, msg) => `"${p}" のセッション停止に失敗しました: ${msg}`,
     resetAllNotif: (count) => `${count} 件のビジーセッションを停止しました`,
@@ -69,14 +71,17 @@ const I18N = {
     modalDesc2: 'このまま切り替えると、実行中のタスクが中断したり、スロット待ちでタイムアウト（エラー）になる可能性があります。',
     modalRunning: '現在実行中のエージェント:',
     safeSwitchGuardTitle: '全枠ビジー安全ガード',
-    safeSwitchGuardDesc: '全スロット稼働時の切り替えタイムアウトを防止'
+    safeSwitchGuardDesc: '全スロット稼働時の切り替えタイムアウトを防止',
+    runningTask: (sec) => `⏳ 処理実行中... (${sec}s)`,
+    stuckWarning: (sec) => `⚠️ 応答遅延・スタック疑い (${sec}s)`
   },
   en: {
     incSlot: 'Increase slot limit (+1)',
     decSlot: 'Decrease slot limit (-1)',
     slotUnavailable: 'Desktop internal API unavailable; slot limit is fixed (estimated: 3)',
     resetAllTooltip: 'Stop backend inference and reset state for all busy agents',
-    resetSlotTooltip: 'Force stop backend inference and immediately free slot',
+    resetSlotBtn: '↺ Reset & Free Slot',
+    resetSlotTooltip: (sec) => `Task running for ${sec}s. Click to force stop backend inference and immediately free slot`,
     resetSlotNotif: (p) => `Stopped inference session and released slot for "${p}"`,
     resetSlotError: (p, msg) => `Failed to stop session for "${p}": ${msg}`,
     resetAllNotif: (count) => `Stopped ${count} busy session(s)`,
@@ -85,7 +90,9 @@ const I18N = {
     modalDesc2: 'Switching now may interrupt ongoing tasks or cause a timeout error while waiting for a free slot.',
     modalRunning: 'Currently running agents:',
     safeSwitchGuardTitle: 'Safe Switch Guard',
-    safeSwitchGuardDesc: 'Prevents switch timeout when all slots are busy'
+    safeSwitchGuardDesc: 'Prevents switch timeout when all slots are busy',
+    runningTask: (sec) => `⏳ Running task... (${sec}s)`,
+    stuckWarning: (sec) => `⚠️ Long running (${sec}s)`
   }
 };
 
@@ -292,6 +299,7 @@ function AgentActiveManagerPane() {
   const [isSwitching, setIsSwitching] = useState(false);
   const [switchFeedback, setSwitchFeedback] = useState(null);
   const [pendingSwitchTarget, setPendingSwitchTarget] = useState(null);
+  const [now, setNow] = useState(Date.now());
 
   const rosterRef = useRef([]);
   const sessionBotMapRef = useRef({});
@@ -328,6 +336,37 @@ function AgentActiveManagerPane() {
       return () => clearInterval(interval);
     }
   }, [hasDesktopPoolControl]);
+
+  // ビジー状態のエージェントが存在する場合、1秒ごとにUIタイマーを更新（120秒スタック検出用）
+  useEffect(() => {
+    if (busyProfiles.length === 0) return;
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [busyProfiles.length > 0]);
+
+  // busyBySession から推論開始時刻の未設定プロファイルを補完（起動前の既存タスク等）
+  useEffect(() => {
+    const current = Date.now();
+    let updated = false;
+    for (const [sid, isBusySid] of Object.entries(busyBySession)) {
+      if (!isBusySid) continue;
+      const bot = sessionBotMapRef.current[sid];
+      if (bot && !agentStatusRef.current[bot]?.start) {
+        agentStatusRef.current[bot] = {
+          status: 'generating',
+          toolName: '',
+          start: current,
+          lastActive: current
+        };
+        updated = true;
+      }
+    }
+    if (updated) {
+      setAgentStatus({ ...agentStatusRef.current });
+    }
+  }, [busyBySession]);
 
   // プロファイル一覧と「ランタイムセッション情報（sessions.list）」の同期
   useEffect(() => {
@@ -991,6 +1030,8 @@ function AgentActiveManagerPane() {
               const cur = agentStatus[name];
               const isBusy = (cur && cur.status !== 'tool_completed') || Object.entries(sessionBotMap).some(([sid, b]) => b === name && busyBySession[sid]);
               const lastInf = lastInferenceMap[name];
+              const elapsedSec = (isBusy && cur?.start) ? Math.max(0, Math.floor((now - cur.start) / 1000)) : 0;
+              const isStuck = isBusy && elapsedSec >= RESET_BUTTON_DELAY_SEC;
 
               let statusLabel = 'Standby';
               let statusBg = 'var(--ui-badge-muted-bg, rgba(127, 127, 127, 0.12))';
@@ -1032,12 +1073,12 @@ function AgentActiveManagerPane() {
                       jsxs('div', {
                         style: { display: 'flex', alignItems: 'center', gap: '4px' },
                         children: [
-                          isBusy && Btn({
+                          isStuck && Btn({
                             onClick: () => handleResetInference(name),
                             variant: 'secondary',
                             style: { padding: '3px 6px', fontSize: '10px' },
-                            title: t.resetSlotTooltip,
-                            children: '↺ Reset & Free Slot'
+                            title: t.resetSlotTooltip(elapsedSec),
+                            children: t.resetSlotBtn
                           }),
                           !isFocused && Btn({
                             disabled: isSwitching,
@@ -1054,7 +1095,7 @@ function AgentActiveManagerPane() {
                     children: [
                       jsx('span', {
                         children: isBusy
-                          ? '⏳ Running task...'
+                          ? (isStuck ? t.stuckWarning(elapsedSec) : t.runningTask(elapsedSec))
                           : lastInf
                             ? `⏱ Last: ${formatRelativeTime(lastInf.completedAt)}${lastInf.duration ? ` (${lastInf.duration}s / ${lastInf.summary})` : ` (${lastInf.summary})`}`
                             : isRunning
