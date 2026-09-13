@@ -51,13 +51,17 @@ Unlike heavy prompt evolution frameworks (e.g., DSPy + GEPA in `self-evolution`)
 ## 🌟 Key Features
 
 1. **Automatic Error Interception (`post_tool_call` hook)**
-   - Listens to tool execution failures across sessions, caching recent errors (up to 50 entries) in memory.
+   - Listens to tool execution failures across sessions, caching recent errors (up to 50 entries) in memory and appending them to `~/.hermes/profiles/<profile_name>/logs/evolution_errors.jsonl`.
+   - The log is read across restarts for the requested lookback window and rotated at 5 MB (one `.1` backup is retained).
 2. **Error Pattern Classification & Distillation**
    - Built-in heuristic rules for path imports, missing files, network timeouts, and OS permissions to formulate concrete prevention patches.
 3. **Automated Skill Patching**
    - Automatically injects actionable lessons into `~/.hermes/skills/<skill_name>/SKILL.md` (or the active profile's skill directory).
 4. **Dry-Run Mode**
    - Inspect proposed skill modifications and diffs prior to saving or committing changes.
+5. **Context-aware Skill Mapping**
+   - `git_*` failures target `git_workflow`; Python execution failures target the skill found in the command path when possible.
+   - Explicit `skill_name` always takes precedence, with `default_skill` as the final fallback.
 
 ---
 
@@ -72,6 +76,8 @@ Triggers the autonomous evolution cycle. Can be invoked directly by the user or 
 | `skill_name` | string | `"default_skill"` | Name of the skill to evolve |
 | `hours` | integer | `6` | Error log lookback window in hours |
 | `dry_run` | boolean | `false` | When `true`, returns proposed patches without applying file changes |
+
+When `skill_name` is omitted, the plugin infers the target from the error's tool name and command context.
 
 ---
 
@@ -174,13 +180,17 @@ AI エージェントが日々のタスクを実行する中で遭遇するエ�
 ## 🌟 主な機能
 
 1. **ツールエラーのリアルタイム自動捕捉 (`post_tool_call` フック)**
-   - エージェントがツールを実行しエラーが発生した際、エラーメッセージとコンテキストをメモリ内に自動蓄積（直近50件）。
+   - エージェントがツールを実行しエラーが発生した際、エラーメッセージとコンテキストをメモリ（直近50件）と `~/.hermes/profiles/<profile_name>/logs/evolution_errors.jsonl` に保存。
+   - 再起動後も指定時間内（既定6時間）のログを読み出し、ログは5MBでローテーション。
 2. **エラー分析と教訓の自動抽出**
    - パス解決（ImportError, FileNotFoundError）、ネットワーク（Timeout）、OS権限（PermissionDenied）などの典型的なエラーパターンを判定し、再発防止の知見を生成。
 3. **スキルの自動更新・パッチ適用**
    - `~/.hermes/skills/<skill_name>/SKILL.md`（またはアクティブプロファイルのスキル）へ知見を自動追記。
 4. **ドライラン（Dry-Run）対応**
    - 実際にファイルを変更する前に、どのようなパッチが適用されるかをシミュレーション確認可能。
+5. **コンテキストに基づくスキル自動判定**
+   - `git_*` は `git_workflow`、Python実行はコマンド内のスキルパスを優先して対象を判定。
+   - `skill_name` の明示指定、該当なしの場合の `default_skill` フォールバックにも対応。
 
 ---
 
@@ -192,7 +202,7 @@ AI エージェントが日々のタスクを実行する中で遭遇するエ�
 
 | パラメータ | 型 | デフォルト値 | 説明 |
 | :--- | :--- | :--- | :--- |
-| `skill_name` | string | `"default_skill"` | 進化・更新対象のスキル名 |
+| `skill_name` | string | 自動判定 | 進化・更新対象のスキル名。省略時はツール名・実行コマンドから判定 |
 | `hours` | integer | `6` | 遡って分析するエラーログの期間（時間） |
 | `dry_run` | boolean | `false` | `true` の場合、実際のファイル変更やコミットを行わずパッチ内容のみを出力 |
 
