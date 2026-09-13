@@ -64,8 +64,12 @@ const I18N = {
     resetSlotBtn: '↺ 強制停止 & 解放',
     resetSlotTooltip: (sec) => `推論・タスクが${sec}秒間継続しています。クリックしてバックエンド推論を強制停止し、スロットを即時解放`,
     resetSlotNotif: (p) => `"${p}" の推論セッションを停止し、スロットを解放しました`,
+    resetSlotPartialWarning: (p, ok, total) => `"${p}" の一部セッション停止に失敗しました (${ok}/${total} 成功)`,
     resetSlotError: (p, msg) => `"${p}" のセッション停止に失敗しました: ${msg}`,
-    resetAllNotif: (count) => `${count} 件のビジーセッションを停止しました`,
+    resetAllNotif: (count) => `${count} 件のビジーエージェントを停止しました`,
+    resetAllPartial: (ok, total) => `一部のエージェント停止に失敗しました (${ok}/${total} 停止完了)`,
+    resetAllFailed: (total) => `すべてのビジーエージェント停止に失敗しました (${total} 件)`,
+    apiUnavailable: 'セッション停止APIを利用できません',
     modalTitle: '全エージェントが作業・推論中です',
     modalDesc1: (max) => `現在起動中のすべてのスロット（${max}枠）でエージェントが推論やツールを実行しています。`,
     modalDesc2: 'このまま切り替えると、実行中のタスクが中断したり、スロット待ちでタイムアウト（エラー）になる可能性があります。',
@@ -83,8 +87,12 @@ const I18N = {
     resetSlotBtn: '↺ Reset & Free Slot',
     resetSlotTooltip: (sec) => `Task running for ${sec}s. Click to force stop backend inference and immediately free slot`,
     resetSlotNotif: (p) => `Stopped inference session and released slot for "${p}"`,
+    resetSlotPartialWarning: (p, ok, total) => `Partial failure stopping session for "${p}" (${ok}/${total} succeeded)`,
     resetSlotError: (p, msg) => `Failed to stop session for "${p}": ${msg}`,
-    resetAllNotif: (count) => `Stopped ${count} busy session(s)`,
+    resetAllNotif: (count) => `Stopped ${count} busy agent(s)`,
+    resetAllPartial: (ok, total) => `Partial failure stopping busy agents (${ok}/${total} stopped)`,
+    resetAllFailed: (total) => `Failed to stop all busy agents (${total} agent(s))`,
+    apiUnavailable: 'Session stop API is unavailable',
     modalTitle: 'All Agents Are Busy',
     modalDesc1: (max) => `All active slots (${max}) are currently busy with reasoning or tool execution.`,
     modalDesc2: 'Switching now may interrupt ongoing tasks or cause a timeout error while waiting for a free slot.',
@@ -305,6 +313,8 @@ function AgentActiveManagerPane() {
   const sessionBotMapRef = useRef({});
   const agentStatusRef = useRef({});
   const lastActiveRef = useRef({});
+  const busyBySessionRef = useRef(busyBySession);
+  busyBySessionRef.current = busyBySession;
   const focusedProfileRef = useRef(focusedProfileName);
   focusedProfileRef.current = focusedProfileName;
   const focusedSidRef = useRef(focusedSessionId);
@@ -337,22 +347,13 @@ function AgentActiveManagerPane() {
     }
   }, [hasDesktopPoolControl]);
 
-  // ビジー状態のエージェントが存在する場合、1秒ごとにUIタイマーを更新（120秒スタック検出用）
-  useEffect(() => {
-    if (busyProfiles.length === 0) return;
-    const timer = setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [busyProfiles.length > 0]);
-
   // busyBySession から推論開始時刻の未設定プロファイルを補完（起動前の既存タスク等）
-  useEffect(() => {
+  const ensureBusyStartTimes = (sMap = sessionBotMapRef.current) => {
     const current = Date.now();
     let updated = false;
-    for (const [sid, isBusySid] of Object.entries(busyBySession)) {
+    for (const [sid, isBusySid] of Object.entries(busyBySessionRef.current)) {
       if (!isBusySid) continue;
-      const bot = sessionBotMapRef.current[sid];
+      const bot = sMap[sid];
       if (bot && !agentStatusRef.current[bot]?.start) {
         agentStatusRef.current[bot] = {
           status: 'generating',
@@ -366,7 +367,11 @@ function AgentActiveManagerPane() {
     if (updated) {
       setAgentStatus({ ...agentStatusRef.current });
     }
-  }, [busyBySession]);
+  };
+
+  useEffect(() => {
+    ensureBusyStartTimes();
+  }, [busyBySession, sessionBotMap]);
 
   // プロファイル一覧と「ランタイムセッション情報（sessions.list）」の同期
   useEffect(() => {
@@ -419,6 +424,7 @@ function AgentActiveManagerPane() {
 
         sessionBotMapRef.current = { ...sessionBotMapRef.current, ...mapUpdate };
         setSessionBotMap((prev) => ({ ...prev, ...mapUpdate }));
+        ensureBusyStartTimes(sessionBotMapRef.current);
 
         // プロファイルに紐づく過去のセッション更新日時の初期補完
         setLastInferenceMap((prev) => {
@@ -480,7 +486,7 @@ function AgentActiveManagerPane() {
   };
 
   // 個別推論状態のリセット & スロット強制解放（関連するすべてのランタイムsessionIdを明示してバックエンド停止を実行）
-  const handleResetInference = async (targetProfile) => {
+  const handleResetInference = async (targetProfile, options = { silent: false }) => {
     try {
       // 複数接続・リモート環境対応: profileRoutes から route descriptor を取得
       const routes = typeof host?.profileRoutes === 'function'
@@ -525,20 +531,42 @@ function AgentActiveManagerPane() {
         }
       }
 
+      if (stopPromises.length === 0) {
+        if (!options.silent) {
+          sendNotification(t.resetSlotError(targetProfile, t.apiUnavailable), 'error');
+        }
+        return false;
+      }
+
       const results = await Promise.allSettled(stopPromises);
-      const allFailed = stopPromises.length > 0 && results.every((r) => r.status === 'rejected');
-      if (allFailed) {
-        const firstErr = results.find((r) => r.status === 'rejected')?.reason;
+      const rejected = results.filter((r) => r.status === 'rejected');
+      if (rejected.length > 0) {
+        const firstErr = rejected[0]?.reason;
         const errMsg = firstErr?.message || String(firstErr || 'Failed to stop backend session');
-        sendNotification(t.resetSlotError(targetProfile, errMsg), 'error');
-        return;
+        if (rejected.length === stopPromises.length) {
+          if (!options.silent) {
+            sendNotification(t.resetSlotError(targetProfile, errMsg), 'error');
+          }
+        } else {
+          const successCount = stopPromises.length - rejected.length;
+          if (!options.silent) {
+            sendNotification(t.resetSlotPartialWarning(targetProfile, successCount, stopPromises.length), 'warning');
+          }
+        }
+        return false;
       }
 
       markInferenceFinished(targetProfile, 'Reset');
-      sendNotification(t.resetSlotNotif(targetProfile), 'success');
+      if (!options.silent) {
+        sendNotification(t.resetSlotNotif(targetProfile), 'success');
+      }
+      return true;
     } catch (err) {
       console.error('[AgentActiveManager] Reset session error:', err);
-      sendNotification(t.resetSlotError(targetProfile, err?.message || 'Error stopping session'), 'error');
+      if (!options.silent) {
+        sendNotification(t.resetSlotError(targetProfile, err?.message || 'Error stopping session'), 'error');
+      }
+      return false;
     }
   };
 
@@ -547,10 +575,18 @@ function AgentActiveManagerPane() {
     const targets = [...busyProfiles];
     if (targets.length === 0) return;
     try {
-      await Promise.allSettled(targets.map((b) => handleResetInference(b)));
-      sendNotification(t.resetAllNotif(targets.length), 'info');
+      const results = await Promise.allSettled(targets.map((b) => handleResetInference(b, { silent: true })));
+      const successCount = results.filter((r) => r.status === 'fulfilled' && r.value === true).length;
+      if (successCount === targets.length) {
+        sendNotification(t.resetAllNotif(successCount), 'success');
+      } else if (successCount > 0) {
+        sendNotification(t.resetAllPartial(successCount, targets.length), 'warning');
+      } else {
+        sendNotification(t.resetAllFailed(targets.length), 'error');
+      }
     } catch (err) {
       console.error('[AgentActiveManager] handleResetAllBusy error:', err);
+      sendNotification(t.resetAllFailed(targets.length), 'error');
     }
   };
 
@@ -669,14 +705,14 @@ function AgentActiveManagerPane() {
         // 該当プロファイルに紐づくランタイムセッションの busyBySession 状態を判定
         const isSessionBusy = Object.entries(sessionBotMapRef.current).some(([sid, bot]) => bot === name && busyBySession[sid]);
 
-        // 判定条件1: tool_completed 状態が 3秒以上経過したら完了
-        const toolFinished = st.status === 'tool_completed' && idleFor >= 3000;
+        // 判定条件1: セッションが非busy かつ tool_completed 状態が 3秒以上経過したら完了
+        const toolFinished = !isSessionBusy && st.status === 'tool_completed' && idleFor >= 3000;
 
         // 判定条件2: セッションが非busy かつ イベントが 3秒以上停止している
         const sessionBecameIdle = !isSessionBusy && idleFor >= 3000;
 
-        // 判定条件3: busyBySessionの状態にかかわらず、イベントが 10秒以上完全に途絶えた（タイムアウト自動復旧）
-        const eventTimedOut = idleFor >= 10000;
+        // 判定条件3: セッションが非busy かつ イベントが 10秒以上完全に途絶えた（タイムアウト自動復旧）
+        const eventTimedOut = !isSessionBusy && idleFor >= 10000;
 
         if (toolFinished || sessionBecameIdle || eventTimedOut) {
           const duration = st.start ? Math.max(1, Math.round((now - st.start) / 1000)) : null;
@@ -759,6 +795,17 @@ function AgentActiveManagerPane() {
       return Object.entries(sessionBotMap).some(([sid, bot]) => bot === name && busyBySession[sid]);
     });
   }, [runningList, agentStatus, sessionBotMap, busyBySession]);
+
+  const hasBusy = busyProfiles.length > 0;
+
+  // ビジー状態のエージェントが存在する場合、1秒ごとにUIタイマーを更新（120秒スタック検出用）
+  useEffect(() => {
+    if (!hasBusy) return;
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [hasBusy]);
 
   const maxBackends = poolLimits.maxBackends || 3;
   const runningCount = runningList.length;
