@@ -49,15 +49,9 @@ const formatRelativeTime = (ts) => {
 };
 
 const getLocale = () => {
-  if (typeof document !== 'undefined') {
-    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang');
-    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja';
-  }
-  if (typeof navigator !== 'undefined') {
-    const langs = navigator.languages || [navigator.language || navigator.userLanguage || ''];
-    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja';
-  }
-  return 'en';
+  const isJa = (s) => typeof s === 'string' && s.toLowerCase().startsWith('ja');
+  return (typeof document !== 'undefined' && isJa(document.documentElement?.lang)) ||
+         (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language]).some(isJa)) ? 'ja' : 'en';
 };
 
 const I18N = {
@@ -126,39 +120,25 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
     return focusedProfile;
   }
 
-  const author = ev.turn_author || ev.turnAuthor || p?.turn_author || p?.turnAuthor ||
-                 ev.author || p?.author || ev.sender || p?.sender;
-  if (typeof author === 'string' && author.trim()) {
-    const prof = author.trim().toLowerCase();
-    if (sid) sMap[sid] = prof;
-    return prof;
-  }
-  if (author?.profile || author?.name || author?.id) {
-    const prof = (author.profile || author.name || author.id).trim().toLowerCase();
-    if (sid) sMap[sid] = prof;
-    return prof;
+  const normalize = (value) => {
+    const candidate = typeof value === 'string'
+      ? value
+      : value?.profile || value?.name || value?.id;
+    return typeof candidate === 'string' ? candidate.trim().toLowerCase() : '';
+  };
+
+  const direct = normalize(
+    ev.turn_author || ev.turnAuthor || p?.turn_author || p?.turnAuthor ||
+    ev.author || p?.author || ev.sender || p?.sender ||
+    ev.agent || ev.bot || ev.speaker || p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName ||
+    p?.from
+  );
+  if (direct) {
+    if (sid) sMap[sid] = direct;
+    return direct;
   }
 
-  const direct = ev.agent || ev.bot || ev.speaker ||
-                 p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName;
-  if (typeof direct === 'string' && direct.trim()) {
-    const prof = direct.trim().toLowerCase();
-    if (sid) sMap[sid] = prof;
-    return prof;
-  }
-
-  if (typeof p?.from === 'string') {
-    const prof = p.from.trim().toLowerCase();
-    if (sid) sMap[sid] = prof;
-    return prof;
-  }
-  if (p?.from?.name || p?.from?.profile) {
-    const prof = (p.from.name || p.from.profile).trim().toLowerCase();
-    if (sid) sMap[sid] = prof;
-    return prof;
-  }
-
-  const evProf = (ev.profile || p?.profile || '').trim().toLowerCase();
+  const evProf = normalize(ev.profile || p?.profile);
   if (evProf) {
     if (evProf === 'default' && focusedProfile && focusedProfile !== 'default') {
       if (sid) sMap[sid] = focusedProfile;
@@ -178,6 +158,8 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
 
 // UI スタイル定義（Hermes 公式 CSS 変数 / Design Tokens 準拠）
 const S = {
+  flexRow: { display: 'flex', alignItems: 'center' },
+  flexBetween: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
   container: {
     display: 'flex',
     flexDirection: 'column',
@@ -544,23 +526,11 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
 
       const nowTime = Date.now();
 
-      const isFinished = matchAny(eventType, [
-        'turn.finish', 'turn.end', 'turn.complete', 'turn.finished',
-        'chat.complete', 'chat.finish',
-        'agent.finish', 'agent.idle',
-        'session.idle', 'session.finish',
-        'run.finish', 'run.complete',
-        'stream.finish', 'stream.end',
-        'generation.finish', 'generation.complete'
-      ]) ||
-      eventType.endsWith('.finish') ||
-      eventType.endsWith('.complete') ||
-      eventType.endsWith('.end') ||
-      eventType.endsWith('.idle') ||
-      eventType.endsWith('.done') ||
-      Boolean(payload?.finish_reason) ||
-      payload?.done === true ||
-      payload?.status === 'completed';
+      const FINISH_SUFFIXES = ['.finish', '.end', '.complete', '.finished', '.idle', '.done'];
+      const isFinished = FINISH_SUFFIXES.some((s) => eventType.endsWith(s)) ||
+        Boolean(payload?.finish_reason) ||
+        payload?.done === true ||
+        payload?.status === 'completed';
 
       const isToolResult = !isFinished && (matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result) || role === 'tool');
       const isToolCall = !isFinished && !isToolResult && (matchAny(eventType, ['tool_call', 'tool.start', 'tool_start', 'tool', 'exec', 'action']) || Boolean(payload?.tool || payload?.tool_call || payload?.function));
@@ -767,23 +737,14 @@ function useSessionActions({
         activeSids.push(focusedSidRef.current);
       }
 
+      const targetSids = activeSids.length > 0 ? activeSids : [null];
       const stopPromises = [];
-      if (activeSids.length > 0) {
-        for (const sid of activeSids) {
-          const stopPayload = {
-            profile: targetProfileName,
-            sessionId: sid,
-            session_id: sid,
-            abort: true
-          };
-          if (typeof host?.requestProfile === 'function') {
-            stopPromises.push(host.requestProfile(routeTarget, 'session.stop', stopPayload));
-          } else if (typeof host?.request === 'function') {
-            stopPromises.push(host.request('session.stop', stopPayload));
-          }
-        }
-      } else {
-        const stopPayload = { profile: targetProfileName, abort: true };
+      for (const sid of targetSids) {
+        const stopPayload = {
+          profile: targetProfileName,
+          abort: true,
+          ...(sid ? { sessionId: sid, session_id: sid } : {})
+        };
         if (typeof host?.requestProfile === 'function') {
           stopPromises.push(host.requestProfile(routeTarget, 'session.stop', stopPayload));
         } else if (typeof host?.request === 'function') {
@@ -1492,18 +1453,11 @@ export default {
       }
     ];
 
-    let unregister;
-    if (typeof ctx.registerMany === 'function') {
-      unregister = ctx.registerMany(entries);
-    } else {
-      const disposers = entries.map((e) => ctx.register(e));
-      unregister = () => {
-        disposers.forEach((d) => {
-          if (typeof d === 'function') d();
-        });
-      };
-    }
-
-    return typeof unregister === 'function' ? unregister : () => {};
+    return typeof ctx.registerMany === 'function'
+      ? ctx.registerMany(entries)
+      : (() => {
+          const disposers = entries.map((e) => ctx.register(e));
+          return () => disposers.forEach((d) => typeof d === 'function' && d());
+        })();
   }
 };
