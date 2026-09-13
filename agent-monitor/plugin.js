@@ -15,15 +15,9 @@ const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.
  * UIのロケールを取得 (ja または en)
  */
 const getLocale = () => {
-  if (typeof document !== 'undefined') {
-    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang');
-    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja';
-  }
-  if (typeof navigator !== 'undefined') {
-    const langs = navigator.languages || [navigator.language || navigator.userLanguage || ''];
-    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja';
-  }
-  return 'en';
+  const isJa = (s) => typeof s === 'string' && s.toLowerCase().startsWith('ja');
+  return (typeof document !== 'undefined' && isJa(document.documentElement?.lang)) ||
+         (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language]).some(isJa)) ? 'ja' : 'en';
 };
 
 /**
@@ -89,41 +83,41 @@ const getActivityTypeMeta = (type) => {
 const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
   const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
 
-  // 1. 既知のセッションIDから特定
   if (sid && sMap[sid]) return sMap[sid];
 
-  // 2. 現在開いているセッションIDと一致する場合、フォーカス中のプロファイルを即時学習
   if (sid && focusedSid && sid === focusedSid && focusedProfile) {
     sMap[sid] = focusedProfile;
     return focusedProfile;
   }
 
-  // 3. 最新Hermes公式の turn_author / author / sender を最優先で認識
-  const author = ev.turn_author || ev.turnAuthor || p?.turn_author || p?.turnAuthor ||
-                 ev.author || p?.author || ev.sender || p?.sender;
-  if (typeof author === 'string' && author.trim()) return author.trim().toLowerCase();
-  if (author?.profile || author?.name || author?.id) return (author.profile || author.name || author.id).trim().toLowerCase();
+  const normalize = (value) => {
+    const candidate = typeof value === 'string'
+      ? value
+      : value?.profile || value?.name || value?.id;
+    return typeof candidate === 'string' ? candidate.trim().toLowerCase() : '';
+  };
 
-  // 4. ペイロード内の直接のボット指定（※ role は除外）
-  const direct = ev.agent || ev.bot || ev.speaker ||
-                 p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName;
-  if (direct && typeof direct === 'string' && direct.trim()) return direct.trim().toLowerCase();
+  const direct = normalize(
+    ev.turn_author || ev.turnAuthor || p?.turn_author || p?.turnAuthor ||
+    ev.author || p?.author || ev.sender || p?.sender ||
+    ev.agent || ev.bot || ev.speaker || p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName ||
+    p?.from
+  );
+  if (direct) {
+    if (sid) sMap[sid] = direct;
+    return direct;
+  }
 
-  // 5. from フィールド
-  if (typeof p?.from === 'string') return p.from.trim().toLowerCase();
-  if (p?.from?.name || p?.from?.profile) return (p.from.name || p.from.profile).trim().toLowerCase();
-
-  // 6. ev.profile / p.profile の判定（Gatewayソケット由来の'default'トラップを回避）
-  const evProf = (ev.profile || p?.profile || '').trim().toLowerCase();
+  const evProf = normalize(ev.profile || p?.profile);
   if (evProf) {
     if (evProf === 'default' && focusedProfile && focusedProfile !== 'default') {
       if (sid) sMap[sid] = focusedProfile;
       return focusedProfile;
     }
+    if (sid) sMap[sid] = evProf;
     return evProf;
   }
 
-  // 7. フォーカス中プロファイルへのフォールバック
   if (focusedProfile) {
     if (sid) sMap[sid] = focusedProfile;
     return focusedProfile;
@@ -416,23 +410,11 @@ function useAgentMonitorState() {
           const isDelta = matchAny(eventType, ['delta', 'stream', 'chunk']);
 
           // 完了・終了シグナルの総合判定（最新Gatewayのイベント拡充に対応）
-          const isFinished = matchAny(eventType, [
-            'turn.finish', 'turn.end', 'turn.complete', 'turn.finished',
-            'chat.complete', 'chat.finish',
-            'agent.finish', 'agent.idle',
-            'session.idle', 'session.finish',
-            'run.finish', 'run.complete',
-            'stream.finish', 'stream.end',
-            'generation.finish', 'generation.complete'
-          ]) ||
-          eventType.endsWith('.finish') ||
-          eventType.endsWith('.complete') ||
-          eventType.endsWith('.end') ||
-          eventType.endsWith('.idle') ||
-          eventType.endsWith('.done') ||
-          Boolean(payload?.finish_reason) ||
-          payload?.done === true ||
-          payload?.status === 'completed';
+          const FINISH_SUFFIXES = ['.finish', '.end', '.complete', '.finished', '.idle', '.done'];
+          const isFinished = FINISH_SUFFIXES.some((s) => eventType.endsWith(s)) ||
+            Boolean(payload?.finish_reason) ||
+            payload?.done === true ||
+            payload?.status === 'completed';
 
           // ツール関連
           const isToolResult = !isFinished && (matchAny(eventType, ['tool_result', 'tool.result', 'tool_output', 'tool_response']) || Boolean(payload?.tool_result) || role === 'tool');
@@ -987,18 +969,11 @@ export default {
       }
     ];
 
-    let unregister;
-    if (typeof ctx.registerMany === 'function') {
-      unregister = ctx.registerMany(entries);
-    } else {
-      const disposers = entries.map((e) => ctx.register(e));
-      unregister = () => {
-        disposers.forEach((d) => {
-          if (typeof d === 'function') d();
-        });
-      };
-    }
-
-    return typeof unregister === 'function' ? unregister : () => {};
+    return typeof ctx.registerMany === 'function'
+      ? ctx.registerMany(entries)
+      : (() => {
+          const disposers = entries.map((e) => ctx.register(e));
+          return () => disposers.forEach((d) => typeof d === 'function' && d());
+        })();
   }
 };
