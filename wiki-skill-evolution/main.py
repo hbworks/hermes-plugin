@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import datetime
+import fcntl
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ DEFAULT_SKILL_NAME = "default_skill"
 ERROR_LOG_RELATIVE_PATH = Path("logs") / "evolution_errors.jsonl"
 ERROR_LOG_MAX_BYTES = 5 * 1024 * 1024
 MAX_RECENT_ERRORS = 50
+MAX_PENDING_ERRORS = 50
 
 # Tool names are intentionally matched from most-specific to least-specific.
 SKILL_MAPPINGS = {
@@ -90,7 +92,7 @@ RUN_EVOLUTION_SCHEMA = {
 
 
 def _now_str() -> str:
-    return datetime.datetime.now().isoformat(timespec="seconds")
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
 def _get_hermes_home_dir() -> Path:
@@ -153,10 +155,14 @@ class WikiSkillEvolutionPlugin:
             log_path = self._error_log_path()
             line = json.dumps(error_record, ensure_ascii=False, separators=(",", ":")) + "\n"
             encoded = line.encode("utf-8")
-            self._rotate_error_log_if_needed(log_path, len(encoded))
-            with log_path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
-                handle.flush()
+            lock_path = log_path.with_suffix(log_path.suffix + ".lock")
+            with lock_path.open("a", encoding="utf-8") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                self._rotate_error_log_if_needed(log_path, len(encoded))
+                with log_path.open("a", encoding="utf-8") as handle:
+                    handle.write(line)
+                    handle.flush()
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
             return True
         except OSError as exc:
             logger.error("[%s] Failed to persist error log: %s", PLUGIN_NAME, exc)
@@ -169,10 +175,13 @@ class WikiSkillEvolutionPlugin:
         for error_record in pending:
             if not self._persist_error(error_record):
                 self._pending_errors.append(error_record)
+        self._pending_errors = self._pending_errors[-MAX_PENDING_ERRORS:]
 
     def _read_error_log(self, hours: int) -> List[Dict[str, Any]]:
         """Read valid error records from the requested lookback window."""
-        cutoff = datetime.datetime.now() - datetime.timedelta(hours=max(0, hours))
+        lookback = datetime.timedelta(hours=max(0, hours))
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - lookback
+        legacy_cutoff = datetime.datetime.now() - lookback
         records: List[Dict[str, Any]] = []
         log_path = self._error_log_path()
         log_paths = [log_path, log_path.with_suffix(log_path.suffix + ".1")]
@@ -187,7 +196,11 @@ class WikiSkillEvolutionPlugin:
                         try:
                             record = json.loads(line)
                             timestamp = datetime.datetime.fromisoformat(str(record["ts"]))
-                            if timestamp >= cutoff and isinstance(record, dict):
+                            if timestamp.tzinfo is None:
+                                is_recent = timestamp >= legacy_cutoff
+                            else:
+                                is_recent = timestamp >= cutoff
+                            if is_recent and isinstance(record, dict):
                                 records.append(record)
                         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                             logger.warning(
@@ -257,6 +270,7 @@ class WikiSkillEvolutionPlugin:
             self.recent_errors = self.recent_errors[-MAX_RECENT_ERRORS:]
             if not self._persist_error(error_record):
                 self._pending_errors.append(error_record)
+                self._pending_errors = self._pending_errors[-MAX_PENDING_ERRORS:]
             logger.info("[%s] Captured tool error from %s: %s", PLUGIN_NAME, tool_name, err_msg[:100])
 
     def on_session_end(self, session_id: str = "", **kwargs: Any) -> None:
@@ -385,6 +399,11 @@ class WikiSkillEvolutionPlugin:
 
         # 2. スキルファイルの取得または生成
         skill_file = self._get_skill_file(skill_name)
+        if not skill_file and dry_run:
+            report["status"] = "dry_run"
+            report["message"] = "ドライラン完了（変更は適用されませんでした）。"
+            report["diff_preview"] = f"追加候補: {len(lessons)} 件"
+            return report
         if not skill_file:
             target_dir = _get_skills_dir() / skill_name
             target_dir.mkdir(parents=True, exist_ok=True)
