@@ -48,59 +48,28 @@ const formatRelativeTime = (ts) => {
   return min < 60 ? `${min}m ago` : `${Math.floor(min / 60)}h ago`;
 };
 
-const getLocale = () => {
-  const isJa = (s) => typeof s === 'string' && s.toLowerCase().startsWith('ja');
-  return (typeof document !== 'undefined' && isJa(document.documentElement?.lang)) ||
-         (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language]).some(isJa)) ? 'ja' : 'en';
-};
-
-const I18N = {
-  ja: {
-    incSlot: 'スロット枠を+1増やす',
-    decSlot: 'スロット枠を-1減らす',
-    slotUnavailable: 'Desktop内部API未接続のため、スロット数は固定（推定3枠）です',
-    resetAllTooltip: 'すべてのビジーエージェントの推論停止とステータスリセットを実行',
-    resetSlotBtn: '↺ 強制停止 & 解放',
-    resetSlotTooltip: (sec) => `推論・タスクが${sec}秒間継続しています。クリックしてバックエンド推論を強制停止し、スロットを即時解放`,
-    resetSlotNotif: (p) => `"${p}" の推論セッションを停止し、スロットを解放しました`,
-    resetSlotPartialWarning: (p, ok, total) => `"${p}" の一部セッション停止に失敗しました (${ok}/${total} 成功)`,
-    resetSlotError: (p, msg) => `"${p}" のセッション停止に失敗しました: ${msg}`,
-    resetAllNotif: (count) => `${count} 件のビジーエージェントを停止しました`,
-    resetAllPartial: (ok, total) => `一部のエージェント停止に失敗しました (${ok}/${total} 停止完了)`,
-    resetAllFailed: (total) => `すべてのビジーエージェント停止に失敗しました (${total} 件)`,
-    apiUnavailable: 'セッション停止APIを利用できません',
-    modalTitle: '全エージェントが作業・推論中です',
-    modalDesc1: (max) => `現在起動中のすべてのスロット（${max}枠）でエージェントが推論やツールを実行しています。`,
-    modalDesc2: 'このまま切り替えると、実行中のタスクが中断したり、スロット待ちでタイムアウト（エラー）になる可能性があります。',
-    modalRunning: '現在実行中のエージェント:',
-    safeSwitchGuardTitle: '全枠ビジー安全ガード',
-    safeSwitchGuardDesc: '全スロット稼働時の切り替えタイムアウトを防止',
-    runningTask: (sec) => `⏳ 処理実行中... (${sec}s)`,
-    stuckWarning: (sec) => `⚠️ 応答遅延・スタック疑い (${sec}s)`
-  },
-  en: {
-    incSlot: 'Increase slot limit (+1)',
-    decSlot: 'Decrease slot limit (-1)',
-    slotUnavailable: 'Desktop internal API unavailable; slot limit is fixed (estimated: 3)',
-    resetAllTooltip: 'Stop backend inference and reset state for all busy agents',
-    resetSlotBtn: '↺ Reset & Free Slot',
-    resetSlotTooltip: (sec) => `Task running for ${sec}s. Click to force stop backend inference and immediately free slot`,
-    resetSlotNotif: (p) => `Stopped inference session and released slot for "${p}"`,
-    resetSlotPartialWarning: (p, ok, total) => `Partial failure stopping session for "${p}" (${ok}/${total} succeeded)`,
-    resetSlotError: (p, msg) => `Failed to stop session for "${p}": ${msg}`,
-    resetAllNotif: (count) => `Stopped ${count} busy agent(s)`,
-    resetAllPartial: (ok, total) => `Partial failure stopping busy agents (${ok}/${total} stopped)`,
-    resetAllFailed: (total) => `Failed to stop all busy agents (${total} agent(s))`,
-    apiUnavailable: 'Session stop API is unavailable',
-    modalTitle: 'All Agents Are Busy',
-    modalDesc1: (max) => `All active slots (${max}) are currently busy with reasoning or tool execution.`,
-    modalDesc2: 'Switching now may interrupt ongoing tasks or cause a timeout error while waiting for a free slot.',
-    modalRunning: 'Currently running agents:',
-    safeSwitchGuardTitle: 'Safe Switch Guard',
-    safeSwitchGuardDesc: 'Prevents switch timeout when all slots are busy',
-    runningTask: (sec) => `⏳ Running task... (${sec}s)`,
-    stuckWarning: (sec) => `⚠️ Long running (${sec}s)`
-  }
+const t = {
+  incSlot: 'Increase slot limit (+1)',
+  decSlot: 'Decrease slot limit (-1)',
+  slotUnavailable: 'Desktop internal API unavailable; slot limit is fixed (estimated: 3)',
+  resetAllTooltip: 'Stop backend inference and reset state for all busy agents',
+  resetSlotBtn: '↺ Reset & Free Slot',
+  resetSlotTooltip: (sec) => `Task running for ${sec}s. Click to force stop backend inference and immediately free slot`,
+  resetSlotNotif: (p) => `Stopped inference session and released slot for "${p}"`,
+  resetSlotPartialWarning: (p, ok, total) => `Partial failure stopping session for "${p}" (${ok}/${total} succeeded)`,
+  resetSlotError: (p, msg) => `Failed to stop session for "${p}": ${msg}`,
+  resetAllNotif: (count) => `Stopped ${count} busy agent(s)`,
+  resetAllPartial: (ok, total) => `Partial failure stopping busy agents (${ok}/${total} stopped)`,
+  resetAllFailed: (total) => `Failed to stop all busy agents (${total} agent(s))`,
+  apiUnavailable: 'Session stop API is unavailable',
+  modalTitle: 'All Agents Are Busy',
+  modalDesc1: (max) => `All active slots (${max}) are currently busy with reasoning or tool execution.`,
+  modalDesc2: 'Switching now may interrupt ongoing tasks or cause a timeout error while waiting for a free slot.',
+  modalRunning: 'Currently running agents:',
+  safeSwitchGuardTitle: 'Safe Switch Guard',
+  safeSwitchGuardDesc: 'Prevents switch timeout when all slots are busy',
+  runningTask: (sec) => `⏳ Running task... (${sec}s)`,
+  stuckWarning: (sec) => `⚠️ Long running (${sec}s)`
 };
 
 const sendNotification = (message, kind = 'info') => {
@@ -1315,8 +1284,6 @@ function SafeSwitchModal({
 // ============================================================================
 
 function AgentActiveManagerPane() {
-  const t = I18N[getLocale()] || I18N.en;
-
   // 1. Hermes 外部状態
   const busyBySession = useValue(host.state?.busyBySession) || {};
   const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile;

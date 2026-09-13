@@ -12,58 +12,29 @@ import React, { useState, useEffect, useRef } from 'react';
 const matchAny = (str, list) => typeof str === 'string' && list.some((k) => str.includes(k));
 
 /**
- * UIのロケールを取得 (ja または en)
- */
-const getLocale = () => {
-  const isJa = (s) => typeof s === 'string' && s.toLowerCase().startsWith('ja');
-  return (typeof document !== 'undefined' && isJa(document.documentElement?.lang)) ||
-         (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language]).some(isJa)) ? 'ja' : 'en';
-};
-
-/**
- * 国際化辞書
- */
-const I18N = {
-  ja: {
-    activeSuffix: '稼働中',
-    filterAll: 'すべて',
-    filterBusy: '推論/ツール',
-    waitingTitle: 'イベント待機中',
-    waitingDesc: 'エージェントが思考やツール実行を行うと、ここにリアルタイムログが流れます',
-    statusThinking: (e) => `● 推論中 (${e}s 経過)`,
-    statusToolStart: (t) => `🚀 呼出: ${t || 'tool'}`,
-    statusToolRunning: (e, t) => `⚡ 実行中: ${t || 'tool'} (${e}s)`,
-    statusToolDone: (e, t, d) => `✅ 完了: ${t || 'tool'} (${d || e}s)`,
-    statusGenerating: (e) => `✍️ 出力中 (${e}s 経過)`
-  },
-  en: {
-    activeSuffix: 'Active',
-    filterAll: 'All',
-    filterBusy: 'Thinking/Tools',
-    waitingTitle: 'Waiting for events',
-    waitingDesc: 'Real-time logs will appear here when agents reason or execute tools',
-    statusThinking: (e) => `● Thinking (${e}s)`,
-    statusToolStart: (t) => `🚀 Calling: ${t || 'tool'}`,
-    statusToolRunning: (e, t) => `⚡ Running: ${t || 'tool'} (${e}s)`,
-    statusToolDone: (e, t, d) => `✅ Completed: ${t || 'tool'} (${d || e}s)`,
-    statusGenerating: (e) => `✍️ Generating (${e}s)`
-  }
+const t = {
+  activeSuffix: 'Active',
+  filterAll: 'All',
+  filterBusy: 'Thinking/Tools',
+  waitingTitle: 'Waiting for events',
+  waitingDesc: 'Real-time logs will appear here when agents reason or execute tools',
+  statusThinking: (e) => `● Thinking (${e}s)`,
+  statusToolStart: (tool) => `🚀 Calling: ${tool || 'tool'}`,
+  statusToolRunning: (e, tool) => `⚡ Running: ${tool || 'tool'} (${e}s)`,
+  statusToolDone: (e, tool, d) => `✅ Completed: ${tool || 'tool'} (${d || e}s)`,
+  statusGenerating: (e) => `✍️ Generating (${e}s)`
 };
 
 /**
  * ステータス別の表示設定（色、アイコン、ラベル）
  */
-const getStatusConfig = () => {
-  const loc = getLocale();
-  const t = I18N[loc] || I18N.en;
-  return {
-    thinking:       { color: '#8b5cf6', icon: '●',  pulse: '#8b5cf6', label: (e) => t.statusThinking(e) },
-    tool_start:     { color: '#f59e0b', icon: '🚀', pulse: '#f59e0b', label: (_, tool) => t.statusToolStart(tool) },
-    tool:           { color: '#8b5cf6', icon: '⚡', pulse: '#8b5cf6', label: (e, tool) => t.statusToolRunning(e, tool) },
-    tool_completed: { color: '#10b981', icon: '✅', pulse: '#10b981', label: (e, tool, d) => t.statusToolDone(e, tool, d) },
-    generating:     { color: '#3b82f6', icon: '✍️', pulse: '#3b82f6', label: (e) => t.statusGenerating(e) }
-  };
-};
+const getStatusConfig = () => ({
+  thinking:       { color: '#8b5cf6', icon: '●',  pulse: '#8b5cf6', label: (e) => t.statusThinking(e) },
+  tool_start:     { color: '#f59e0b', icon: '🚀', pulse: '#f59e0b', label: (_, tool) => t.statusToolStart(tool) },
+  tool:           { color: '#8b5cf6', icon: '⚡', pulse: '#8b5cf6', label: (e, tool) => t.statusToolRunning(e, tool) },
+  tool_completed: { color: '#10b981', icon: '✅', pulse: '#10b981', label: (e, tool, d) => t.statusToolDone(e, tool, d) },
+  generating:     { color: '#3b82f6', icon: '✍️', pulse: '#3b82f6', label: (e) => t.statusGenerating(e) }
+});
 
 /**
  * アクティビティ種別に応じたメタ情報（アイコン、色）
@@ -379,7 +350,7 @@ function useAgentMonitorState() {
       if (typeof host?.onEvent === 'function') {
         unsubscribe = host.onEvent('*', (event) => {
           if (!event) return;
-          const timestamp = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+          const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
           const eventType = (event.type || event.event || 'gateway.event').toLowerCase();
           const payload = event.payload ?? event.data ?? event.message ?? event;
 
@@ -607,9 +578,6 @@ function useAgentMonitorState() {
  * モニターヘッダー（稼働数インジケーター）
  */
 function MonitorHeader({ activeCount }) {
-  const loc = getLocale();
-  const t = I18N[loc] || I18N.en;
-
   return jsxs('div', {
     style: { ...S.flexBetween, ...S.sectionHeader },
     children: [
@@ -810,9 +778,6 @@ function AgentBubbleGrid({
  * ライブイベントヘッダー（フィルター＆クリアボタン）
  */
 function LiveEventsHeader({ filter, setFilter, onClear }) {
-  const loc = getLocale();
-  const t = I18N[loc] || I18N.en;
-
   return jsxs('div', {
     style: { ...S.flexBetween, padding: '4px 14px 6px 14px' },
     children: [
@@ -860,9 +825,6 @@ function ActivityItem({ act }) {
  * アクティビティログ一覧
  */
 function ActivityLogList({ activities }) {
-  const loc = getLocale();
-  const t = I18N[loc] || I18N.en;
-
   if (activities.length === 0) {
     return jsx('div', {
       style: { flex: 1, overflowY: 'auto', padding: '4px 10px', display: 'flex', flexDirection: 'column', gap: '6px' },
