@@ -22,8 +22,9 @@ However, several architectural constraints often led to frustrating profile-swit
 
 ## 🌟 Key Features
 
-### 1. Real-time Slot Gauge & Quick Tuning
-* Visualizes active backend instances (e.g., `3 / 3 Active`) with dynamic color indicators.
+### 1. Real-time Slot Gauge & Quick Tuning (Tracked / Estimated)
+* Visualizes active backend instances (e.g., `3 / 3 Active (Est.)`) with dynamic color indicators based on real-time activity and LRU timeouts.
+* Displays live reasoning/tools as `Busy` and cached standby instances as `♨️ Warm`.
 * Quick adjustment buttons (`+1` / `-1` Slot) to instantly expand or shrink concurrency limits.
 * One-click idle expiration presets (`2m` / `5m` / `10m`) to quickly adjust LRU retirement timing.
 
@@ -56,6 +57,8 @@ However, several architectural constraints often led to frustrating profile-swit
 * **Automatic Fallback (Estimated 3-Slot Safe Mode)**:
   * When running on non-supported desktop builds, web environments, or where `window.hermesDesktop.setPoolLimits` is unavailable, the plugin automatically falls back to an **Estimated 3-Slot Mode**.
   * Slot adjustment buttons are safely disabled with a descriptive tooltip, while all core monitoring, inference history tracking, session stop (`session.stop`), and all-busy switch protection features continue to function seamlessly via official `@hermes/plugin-sdk`.
+* **Tracked / Estimated Backend State (Zero Polling Overhead)**:
+  * Because Hermes Desktop does not emit internal process exit events to plugins, active slots are accurately **tracked via real-time inference/tool events and estimated LRU idle expiration timers**. This fail-safe estimation guarantees zero risk of free-slot timeouts while maintaining strict adherence to plugin isolation boundaries.
 * **Zero Monkey-Patching / Strict SDK Conformance**:
   * The plugin strictly adheres to official PluginContext contracts. It does **NOT** monkey-patch shared SDK objects (`host.warmProfile`), timers (`window.setTimeout`), or DOM pointer events, guaranteeing zero side effects or interference with other plugins and core Hermes features.
 
@@ -121,8 +124,9 @@ Hermes Desktop は複数のエージェントを高速に切り替えるため�
 
 ## 🌟 主な機能
 
-### 1. スロット枠 ＆ 使用状況のリアルタイム表示
-* 現在起動しているバックエンド数（例: `3 / 3 Active`）をカラーゲージで可視化。
+### 1. スロット枠 ＆ 推計使用状況のリアルタイム表示
+* リアルタイムの推論イベントとLRU退避時間に基づくアクティブバックエンド数（例: `3 / 3 Active (Est.)`）をカラーゲージで可視化。
+* 実行中のエージェントは `Busy`、メモリにキャッシュ保持されているエージェントは `♨️ Warm` として明確に区別して表示。
 * スロット枠のクイック調整（`+1` / `-1` ボタン）が可能。
 * アイドル自動解放時間（`idleMs`）をワンクリック（`2m` / `5m` / `10m`）で即座に変更可能。
 
@@ -155,6 +159,8 @@ Hermes Desktop は複数のエージェントを高速に切り替えるため�
 * **自動フォールバック動作（推定 3 スロット安全モード）**:
   * 内部 API が非提供の環境（Web 版や将来の内部仕様変更時など）では、自動的に **推定 3 スロット安全モード** へフォールバックします。
   * スロット変更ボタンは安全のため無効化（ツールチップで案内）されますが、エージェント監視・推論履歴追跡・セッション停止（`session.stop`）・全枠ビジー警告ダイアログ等の安全機能は公式 `@hermes/plugin-sdk` のみで完全に動作し続けます。
+* **推計追跡（Tracked / Estimated）アーキテクチャについて**:
+  * Hermes Desktop の仕様上、アイドルプロセスの内部終了イベント（kill通知）はプラグインへ公開されていません。そのため本プラグインでは、**「推論・ツール実行のリアルタイムイベント監視」と「設定されたLRUアイドルタイマー」を組み合わせた推計追跡**を採用しています。安全側に倒してスロット枠の逼迫を事前検知することで、プロファイル切り替え時のタイムアウトエラーを確実に未然防止します。
 * **モンキーパッチ排除・公式 SDK 契約への厳格な準拠**:
   * 共有 SDK オブジェクト（`host.warmProfile` 等）の書き換えやグローバルタイマー（`window.setTimeout`）、マウスイベントの改変は一切行っていません。他のプラグインや Hermes 本体の動作に副作用を及ぼすことなく、安全に共存できます。
 

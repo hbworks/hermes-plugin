@@ -69,7 +69,11 @@ const t = {
   safeSwitchGuardTitle: 'Safe Switch Guard',
   safeSwitchGuardDesc: 'Prevents switch timeout when all slots are busy',
   runningTask: (sec) => `⏳ Running task... (${sec}s)`,
-  stuckWarning: (sec) => `⚠️ Long running (${sec}s)`
+  stuckWarning: (sec) => `⚠️ Long running (${sec}s)`,
+  slotTitle: 'TRACKED BACKEND SLOTS',
+  slotHelp: 'Estimated based on real-time inference events and idle timeout. Hermes internally manages actual process exits.',
+  activeEst: 'Active (Est.)',
+  warmStatus: '♨️ Warm'
 };
 
 const sendNotification = (message, kind = 'info') => {
@@ -915,7 +919,11 @@ function SlotCapacityCard({
             style: S.title,
             children: [
               jsx('span', { children: '⚡' }),
-              jsx('span', { children: 'ACTIVE BACKEND SLOTS' }),
+              jsx('span', { children: t.slotTitle }),
+              jsx('span', {
+                title: t.slotHelp,
+                style: { cursor: 'help', fontSize: '10px', opacity: 0.65, marginLeft: '2px' }
+              }, 'ℹ️'),
               allRunningAreBusy && Badge('ALL BUSY', 'var(--ui-badge-danger-bg, rgba(239, 68, 68, 0.15))', 'var(--ui-danger, #ef4444)')
             ]
           }),
@@ -947,12 +955,12 @@ function SlotCapacityCard({
             style: { display: 'flex', alignItems: 'baseline', gap: '6px' },
             children: [
               jsx('span', { style: { ...S.statVal, color: barColor }, children: `${runningCount} / ${maxBackends}` }),
-              jsx('span', { style: S.statLabel, children: 'Active' })
+              jsx('span', { style: S.statLabel, children: t.activeEst })
             ]
           }),
           jsx('span', {
             style: { fontSize: '11px', color: 'var(--ui-muted, #888888)' },
-            children: isFull ? (allRunningAreBusy ? '0 Free (All Busy)' : '0 Free (LRU Evictable)') : `${maxBackends - runningCount} Free Slots`
+            children: isFull ? (allRunningAreBusy ? '0 Free (All Busy)' : '0 Free (LRU Evictable - Est.)') : `${maxBackends - runningCount} Free Slots (Est.)`
           })
         ]
       }),
@@ -1049,7 +1057,7 @@ function AgentRow({
     statusBg = 'var(--ui-badge-warning-bg, rgba(245, 158, 11, 0.15))';
     statusColor = 'var(--ui-warning, #d97706)';
   } else if (isRunning) {
-    statusLabel = '💤 Idle';
+    statusLabel = t.warmStatus;
     statusBg = 'var(--ui-badge-success-bg, rgba(16, 185, 129, 0.15))';
     statusColor = 'var(--ui-success, #10b981)';
   }
@@ -1105,12 +1113,12 @@ function AgentRow({
               : lastInf
                 ? `⏱ Last: ${formatRelativeTime(lastInf.completedAt)}${lastInf.duration ? ` (${lastInf.duration}s / ${lastInf.summary})` : ` (${lastInf.summary})`}`
                 : isRunning
-                  ? '⏱ Last: None (Idle)'
+                  ? '⏱ Last: None (Warm)'
                   : '⏱ Last: None (Standby)'
           }),
           isRunning && !isBusy && jsx('span', {
             style: { color: isFocused ? 'var(--ui-primary, #6366f1)' : 'var(--ui-success, #059669)', fontWeight: '600' },
-            children: isFocused ? 'Protected' : 'Evictable'
+            children: isFocused ? 'Protected' : 'Evictable (Est.)'
           })
         ]
       })
