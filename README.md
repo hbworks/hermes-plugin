@@ -31,6 +31,7 @@ Rather than chasing an exhaustive list of features or unnecessary algorithmic co
 | :--- | :--- | :--- | :--- | :--- |
 | **[Agent Active Manager](./agent-active-manager/)** | Hermes Desktop | JS (ESM) | Optimizes backend slot limits and inference states to eliminate profile-switch timeouts | [Read README](./agent-active-manager/README.md) |
 | **[Agent Activity Monitor](./agent-monitor/)** | Hermes Desktop | JS (ESM) | Real-time visualizer and event monitor for agent inference, tool runs, and gateway events | [Read README](./agent-monitor/README.md) |
+| **[Preview Language Override](./preview-language-override/)** | Hermes Desktop | JS (ESM) | Overrides `Accept-Language`, `navigator.language`, and `navigator.languages` in preview browsers | [Read README](./preview-language-override/README.md) |
 | **[Credential Safety](./credential-safety/)** | Hermes Agent | Python | Multi-layer secret redaction across tools, LLMs, and terminal logs with offline DB/log auditing | [Read README](./credential-safety/README.md) |
 | **[SQLite Memory](./sqlite-memory/)** | Hermes Agent / Desktop | Python / JS | Zero-dependency SQLite FTS5 long-term memory with automatic recall. Bundles Web API & Desktop GUI (Unified Package) | [Read README](./sqlite-memory/README.md) |
 | **[WikiSkill Evolution](./wiki-skill-evolution/)** | Hermes Agent | Python | Autonomous evolution loop capturing tool errors and distilling lessons into skills (`SKILL.md`) | [Read README](./wiki-skill-evolution/README.md) |
@@ -44,8 +45,9 @@ Plugins in this repository are divided into **Hermes Desktop Plugins (UI extensi
 ```
 hermes-plugin/
 ├── [Hermes Desktop Plugins] (UI / JavaScript ESM)
-│   ├── agent-active-manager/  ──> ~/.hermes/desktop-plugins/agent-active-manager/
-│   └── agent-monitor/         ──> ~/.hermes/desktop-plugins/agent-monitor/
+│   ├── agent-active-manager/     ──> ~/.hermes/desktop-plugins/agent-active-manager/
+│   ├── agent-monitor/            ──> ~/.hermes/desktop-plugins/agent-monitor/
+│   └── preview-language-override/ ──> ~/.hermes/desktop-plugins/preview-language-override/
 │
 └── [Hermes Agent Plugins] (Backend / Python)
     ├── credential-safety/     ──> ~/.hermes/plugins/credential-safety/
@@ -71,6 +73,9 @@ ln -s "$(pwd)/agent-active-manager" ~/.hermes/desktop-plugins/agent-active-manag
 
 # Install Agent Activity Monitor
 ln -s "$(pwd)/agent-monitor" ~/.hermes/desktop-plugins/agent-monitor
+
+# Install Preview Language Override
+ln -s "$(pwd)/preview-language-override" ~/.hermes/desktop-plugins/preview-language-override
 ```
 
 > [!TIP]
@@ -131,6 +136,11 @@ hermes-plugin/
 │   ├── plugin.js
 │   └── README.md
 │
+├── preview-language-override/ # [Desktop] Preview browser language override
+│   ├── plugin.js
+│   ├── preload.js
+│   └── README.md
+│
 ├── credential-safety/         # [Agent] 4-layer secret redactor & offline scanner
 │   ├── hooks.py
 │   ├── patterns.py
@@ -160,6 +170,8 @@ hermes-plugin/
 
 ```bash
 # Run all unit tests across all plugins
+node --check preview-language-override/plugin.js
+node --check preview-language-override/preload.js
 python3 credential-safety/tests/test_credential_safety.py -v
 python3 sqlite-memory/tests/test_sqlite_memory.py -v
 python3 wiki-skill-evolution/tests/test_evolution.py -v
@@ -206,6 +218,7 @@ Hermes AI エージェント（[Hermes Agent](https://github.com/NousResearch/he
 | :--- | :--- | :--- | :--- | :--- |
 | **[Agent Active Manager](./agent-active-manager/)** | Hermes Desktop | JS (ESM) | バックエンド同時起動スロット枠と推論状態を最適化し、プロファイル切替時のタイムアウトを防止 | [詳細 README](./agent-active-manager/README.md) |
 | **[Agent Activity Monitor](./agent-monitor/)** | Hermes Desktop | JS (ESM) | ボットの推論・ツール実行状態や Gateway イベントをリアルタイムに可視化・監視 | [詳細 README](./agent-monitor/README.md) |
+| **[Preview Language Override](./preview-language-override/)** | Hermes Desktop | JS (ESM) | プレビューブラウザの `Accept-Language`、`navigator.language`、`navigator.languages` を上書き | [詳細 README](./preview-language-override/README.md) |
 | **[Credential Safety](./credential-safety/)** | Hermes Agent | Python | ツール入出力・LLM推論・ターミナル出力から認証情報を自動マスクする多層防御。過去DB監査ツール同梱 | [詳細 README](./credential-safety/README.md) |
 | **[SQLite Memory](./sqlite-memory/)** | Hermes Agent / Desktop | Python / JS | ゼロ依存・SQLite FTS5による長期記憶＆自動想起。Web API および Desktop GUI（Unified Package）を同梱 | [詳細 README](./sqlite-memory/README.md) |
 | **[WikiSkill Evolution](./wiki-skill-evolution/)** | Hermes Agent | Python | ツール実行エラーを自動収集・分析し、教訓を Wiki ナレッジやスキル定義（`SKILL.md`）へ自律反映 | [詳細 README](./wiki-skill-evolution/README.md) |
@@ -219,8 +232,9 @@ Hermes AI エージェント（[Hermes Agent](https://github.com/NousResearch/he
 ```
 hermes-plugin/
 ├── 【Hermes Desktop 向けプラグイン】（UI / JS）
-│   ├── agent-active-manager/  ──> ~/.hermes/desktop-plugins/agent-active-manager/
-│   └── agent-monitor/         ──> ~/.hermes/desktop-plugins/agent-monitor/
+│   ├── agent-active-manager/     ──> ~/.hermes/desktop-plugins/agent-active-manager/
+│   ├── agent-monitor/            ──> ~/.hermes/desktop-plugins/agent-monitor/
+│   └── preview-language-override/ ──> ~/.hermes/desktop-plugins/preview-language-override/
 │
 └── 【Hermes Agent 向けプラグイン】（Python）
     ├── credential-safety/     ──> ~/.hermes/plugins/credential-safety/
@@ -246,6 +260,9 @@ ln -s "$(pwd)/agent-active-manager" ~/.hermes/desktop-plugins/agent-active-manag
 
 # Agent Activity Monitor の配置
 ln -s "$(pwd)/agent-monitor" ~/.hermes/desktop-plugins/agent-monitor
+
+# Preview Language Override の配置
+ln -s "$(pwd)/preview-language-override" ~/.hermes/desktop-plugins/preview-language-override
 ```
 
 > [!TIP]
@@ -306,6 +323,11 @@ hermes-plugin/
 │   ├── plugin.js
 │   └── README.md
 │
+├── preview-language-override/ # [Desktop] プレビューブラウザの言語設定上書き
+│   ├── plugin.js
+│   ├── preload.js
+│   └── README.md
+│
 ├── credential-safety/         # [Agent] 認証情報漏洩防止・4層サニタイズ＆過去ログ監査
 │   ├── hooks.py
 │   ├── patterns.py
@@ -335,6 +357,8 @@ hermes-plugin/
 
 ```bash
 # 全プラグインのユニットテストを一括実行 (35テスト)
+node --check preview-language-override/plugin.js
+node --check preview-language-override/preload.js
 python3 credential-safety/tests/test_credential_safety.py -v
 python3 sqlite-memory/tests/test_sqlite_memory.py -v
 python3 wiki-skill-evolution/tests/test_evolution.py -v
