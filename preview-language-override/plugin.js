@@ -674,15 +674,26 @@ export default {
           return () => disposers.forEach(disposer => disposer?.())
         })()
 
-    return () => {
-      disposeContributions?.()
+    const disposeController = () => {
+      controller.dispose?.()
       if (activeController === controller) {
-        controller.dispose?.()
         if (controllerSlot() === controller) {
           delete globalThis[CONTROLLER_SLOT]
         }
         activeController = null
       }
+    }
+
+    // The desktop loader tracks context disposers during disable and hot
+    // reload. Returning a cleanup function alone is insufficient because the
+    // loader does not consume the value returned by register().
+    if (typeof ctx.onDispose === 'function') {
+      ctx.onDispose(disposeController)
+    }
+
+    return () => {
+      disposeContributions?.()
+      disposeController()
     }
   }
 }
