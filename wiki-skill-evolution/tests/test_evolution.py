@@ -2,10 +2,12 @@
 import datetime
 import json
 import os
+import shlex
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # Add plugin dir to path
 import sys
@@ -272,6 +274,130 @@ class TestWikiSkillEvolution(unittest.TestCase):
 
         self.assertEqual(res["status"], "dry_run")
         self.assertFalse((self.hermes_home / "skills" / "new_skill" / "SKILL.md").exists())
+
+    def _create_skill_file(self, skill_name="existing_skill"):
+        skill_dir = self.hermes_home / "skills" / skill_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_file = skill_dir / "SKILL.md"
+        skill_file.write_text(
+            f"# {skill_name}\n\n## 実行手順\n- 基本タスクを実行する。\n",
+            encoding="utf-8",
+        )
+        return skill_dir, skill_file
+
+    def _initialize_git_repository(self, skill_dir):
+        self.assertEqual(
+            self.plugin._run_terminal_command(["git", "init"], cwd=skill_dir)["exit_code"],
+            0,
+        )
+        self.assertEqual(
+            self.plugin._run_terminal_command(
+                ["git", "config", "user.name", "WikiSkill Tests"], cwd=skill_dir
+            )["exit_code"],
+            0,
+        )
+        self.assertEqual(
+            self.plugin._run_terminal_command(
+                ["git", "config", "user.email", "wikiskill-tests@example.com"], cwd=skill_dir
+            )["exit_code"],
+            0,
+        )
+        self.assertEqual(
+            self.plugin._run_terminal_command(["git", "add", "SKILL.md"], cwd=skill_dir)["exit_code"],
+            0,
+        )
+        self.assertEqual(
+            self.plugin._run_terminal_command(
+                ["git", "commit", "-m", "Initial test commit"], cwd=skill_dir
+            )["exit_code"],
+            0,
+        )
+
+    def test_run_cycle_existing_unmanaged_skill_reports_updated_uncommitted(self):
+        _, skill_file = self._create_skill_file()
+        self.plugin.on_post_tool_call(tool_name="python_run", error="ImportError: missing mod")
+
+        result = self.plugin.run_cycle(skill_name="existing_skill")
+
+        self.assertEqual(result["status"], "updated_uncommitted")
+        self.assertTrue(result["patch_applied"])
+        self.assertTrue(result["gating_passed"])
+        self.assertFalse(result["committed"])
+        self.assertEqual(result["commit_error"], "skill directory is not a git repository")
+        self.assertIn(ERROR_RULES[0]["patch"], skill_file.read_text(encoding="utf-8"))
+
+    def test_run_cycle_commit_failure_is_reported(self):
+        skill_dir, _ = self._create_skill_file("dedicated_skill")
+        self._initialize_git_repository(skill_dir)
+        self.plugin.on_post_tool_call(tool_name="python_run", error="ImportError: missing mod")
+
+        original_run = self.plugin._run_terminal_command
+
+        def fail_commit(cmd, cwd=None):
+            args = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+            if args[:2] == ["git", "commit"]:
+                return {"exit_code": 1, "stdout": "", "stderr": "simulated commit failure"}
+            return original_run(cmd, cwd=cwd)
+
+        self.plugin._run_terminal_command = fail_commit
+        result = self.plugin.run_cycle(skill_name="dedicated_skill")
+
+        self.assertEqual(result["status"], "commit_failed")
+        self.assertTrue(result["patch_applied"])
+        self.assertTrue(result["gating_passed"])
+        self.assertFalse(result["committed"])
+        self.assertIn("simulated commit failure", result["commit_error"])
+
+    def test_run_cycle_gating_failure_does_not_checkout_user_changes(self):
+        _, skill_file = self._create_skill_file("gating_skill")
+        original_content = skill_file.read_text(encoding="utf-8")
+        self.plugin.on_post_tool_call(tool_name="python_run", error="ImportError: missing mod")
+
+        commands = []
+        original_run = self.plugin._run_terminal_command
+
+        def track_commands(cmd, cwd=None):
+            args = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+            commands.append(args)
+            return original_run(cmd, cwd=cwd)
+
+        with patch.object(self.plugin, "_run_terminal_command", side_effect=track_commands):
+            with patch.object(self.plugin, "_run_gating", return_value=False):
+                result = self.plugin.run_cycle(skill_name="gating_skill")
+
+        self.assertEqual(result["status"], "rollback")
+        self.assertEqual(skill_file.read_text(encoding="utf-8"), original_content)
+        self.assertFalse(any(command[:2] == ["git", "checkout"] for command in commands))
+
+    def test_run_cycle_new_skill_commits_initial_and_evolution_updates(self):
+        self.plugin.on_post_tool_call(tool_name="python_run", error="ImportError: missing mod")
+        git_identity = {
+            "GIT_AUTHOR_NAME": "WikiSkill Tests",
+            "GIT_AUTHOR_EMAIL": "wikiskill-tests@example.com",
+            "GIT_COMMITTER_NAME": "WikiSkill Tests",
+            "GIT_COMMITTER_EMAIL": "wikiskill-tests@example.com",
+        }
+        previous_identity = {key: os.environ.get(key) for key in git_identity}
+        os.environ.update(git_identity)
+        try:
+            result = self.plugin.run_cycle(skill_name="new_skill")
+        finally:
+            for key, value in previous_identity.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        skill_dir = self.hermes_home / "skills" / "new_skill"
+        log_result = self.plugin._run_terminal_command(
+            ["git", "log", "--format=%s"], cwd=skill_dir
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["patch_applied"])
+        self.assertTrue(result["gating_passed"])
+        self.assertTrue(result["committed"])
+        self.assertEqual(log_result["exit_code"], 0)
+        self.assertEqual(len(log_result["stdout"].splitlines()), 2)
 
 
 if __name__ == "__main__":

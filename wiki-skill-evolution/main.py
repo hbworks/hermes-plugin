@@ -322,6 +322,54 @@ class WikiSkillEvolutionPlugin:
         except Exception as e:
             return {"exit_code": -1, "stdout": "", "stderr": str(e)}
 
+    def _format_command_error(self, action: str, result: Dict[str, Any]) -> str:
+        detail = str(result.get("stderr") or result.get("stdout") or "unknown error").strip()
+        return f"{action} failed: {detail}"
+
+    def _git_repository_info(self, skill_dir: Path) -> Dict[str, Any]:
+        """Return whether the skill is in Git and the repository root when known."""
+        result = self._run_terminal_command(["git", "rev-parse", "--show-toplevel"], cwd=skill_dir)
+        root_text = str(result.get("stdout", "")).strip()
+        if result.get("exit_code") != 0 or not root_text:
+            return {
+                "is_repository": False,
+                "root": None,
+                "error": "skill directory is not a git repository",
+            }
+        return {"is_repository": True, "root": Path(root_text).resolve(), "error": None}
+
+    def _commit_skill_update(self, skill_dir: Path, message: str) -> Dict[str, Any]:
+        """Stage and commit SKILL.md, returning verified Git status details."""
+        repository = self._git_repository_info(skill_dir)
+        if not repository["is_repository"]:
+            return {"ok": False, "git_repository": False, "error": repository["error"]}
+
+        add_result = self._run_terminal_command(["git", "add", "--", "SKILL.md"], cwd=skill_dir)
+        if add_result.get("exit_code") != 0:
+            error = self._format_command_error("git add", add_result)
+            logger.error("[%s] %s", PLUGIN_NAME, error)
+            return {"ok": False, "git_repository": True, "error": error}
+
+        commit_result = self._run_terminal_command(
+            ["git", "commit", "--only", "-m", message, "--", "SKILL.md"],
+            cwd=skill_dir,
+        )
+        if commit_result.get("exit_code") != 0:
+            error = self._format_command_error("git commit", commit_result)
+            logger.error("[%s] %s", PLUGIN_NAME, error)
+            return {"ok": False, "git_repository": True, "error": error}
+
+        return {"ok": True, "git_repository": True, "error": None}
+
+    def _initialize_skill_repository(self, skill_dir: Path) -> Dict[str, Any]:
+        """Create and seed a Git repository for a newly generated skill."""
+        init_result = self._run_terminal_command(["git", "init"], cwd=skill_dir)
+        if init_result.get("exit_code") != 0:
+            error = self._format_command_error("git init", init_result)
+            logger.error("[%s] %s", PLUGIN_NAME, error)
+            return {"ok": False, "git_repository": False, "error": error}
+        return self._commit_skill_update(skill_dir, "Initial commit")
+
     def _propose_skill_patch(self, skill_file: Path, lessons: List[str]) -> Optional[str]:
         """Propose an updated version of skill markdown."""
         try:
@@ -411,14 +459,17 @@ class WikiSkillEvolutionPlugin:
             report["message"] = "ドライラン完了（変更は適用されませんでした）。"
             report["diff_preview"] = f"追加候補: {len(lessons)} 件"
             return report
+        created_skill = False
+        initialization_error: Optional[str] = None
         if not skill_file:
+            created_skill = True
             target_dir = _get_skills_dir() / skill_name
             target_dir.mkdir(parents=True, exist_ok=True)
             skill_file = target_dir / "SKILL.md"
             skill_file.write_text(f"# {skill_name}\n\n自動生成されたスキル定義。\n\n## 実行手順\n- 基本タスクを実行する。\n", encoding="utf-8")
-            self._run_terminal_command(["git", "init"], cwd=target_dir)
-            self._run_terminal_command(["git", "add", "SKILL.md"], cwd=target_dir)
-            self._run_terminal_command(["git", "commit", "-m", "Initial commit"], cwd=target_dir)
+            initialization = self._initialize_skill_repository(target_dir)
+            if not initialization["ok"]:
+                initialization_error = initialization["error"]
 
         skill_dir = skill_file.parent
         original_content = skill_file.read_text(encoding="utf-8")
@@ -441,15 +492,55 @@ class WikiSkillEvolutionPlugin:
         report["patch_applied"] = True
 
         if self._run_gating(skill_file):
-            # 5. テスト合格: コミット
-            self._run_terminal_command(["git", "add", "SKILL.md"], cwd=skill_dir)
-            self._run_terminal_command(["git", "commit", "-m", f"WikiSkill 自律更新: {_now_str()}"], cwd=skill_dir)
-            report.update({"committed": True, "gating_passed": True, "status": "success", "message": f"スキル '{skill_name}' の自律更新とテスト・コミットが成功しました。"})
-            self.recent_errors.clear()
+            report["gating_passed"] = True
+            commit_result: Optional[Dict[str, Any]] = None
+            if created_skill:
+                commit_result = self._commit_skill_update(
+                    skill_dir,
+                    f"WikiSkill 自律更新: {_now_str()}",
+                )
+                if initialization_error and not commit_result["git_repository"]:
+                    commit_result["error"] = initialization_error
+            else:
+                repository = self._git_repository_info(skill_dir)
+                if repository["is_repository"] and repository["root"] == skill_dir.resolve():
+                    commit_result = self._commit_skill_update(
+                        skill_dir,
+                        f"WikiSkill 自律更新: {_now_str()}",
+                    )
+                else:
+                    report.update({
+                        "status": "updated_uncommitted",
+                        "message": "スキル更新と Gating は成功しました。既存スキルの自動コミットは実行していません。",
+                        "commit_error": (
+                            repository["error"]
+                            or "existing skill repository is not dedicated to this skill"
+                        ),
+                    })
+
+            if commit_result is not None:
+                report["committed"] = bool(commit_result["ok"])
+                if commit_result["ok"]:
+                    report.update({
+                        "status": "success",
+                        "message": f"スキル '{skill_name}' の自律更新とテスト・コミットが成功しました。",
+                    })
+                    self.recent_errors.clear()
+                elif commit_result["git_repository"]:
+                    report.update({
+                        "status": "commit_failed",
+                        "message": "スキル更新と Gating は成功しましたが、Git コミットに失敗しました。",
+                        "commit_error": commit_result["error"],
+                    })
+                else:
+                    report.update({
+                        "status": "updated_uncommitted",
+                        "message": "スキル更新と Gating は成功しましたが、Git コミットは実行されませんでした。",
+                        "commit_error": commit_result["error"],
+                    })
         else:
             # 6. テスト失敗: ロールバック
             skill_file.write_text(original_content, encoding="utf-8")
-            self._run_terminal_command(["git", "checkout", "HEAD", "--", "SKILL.md"], cwd=skill_dir)
             report.update({"status": "rollback", "message": "Gating テストに失敗したため、スキルをロールバックしました。"})
 
         return report
