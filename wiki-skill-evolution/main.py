@@ -252,8 +252,19 @@ class WikiSkillEvolutionPlugin:
 
     def on_post_tool_call(self, tool_name: str = "", args: Any = None, result: Any = None, error: Any = None, **kwargs: Any) -> None:
         """Hook called after any tool execution in Hermes."""
+        # Hermes may report failures through the legacy ``error`` argument,
+        # hook keyword arguments, or the tool result payload.
+        err_msg: Optional[str] = None
         if error:
             err_msg = str(error)
+        elif kwargs.get("error_message"):
+            err_msg = str(kwargs["error_message"])
+        elif kwargs.get("status") == "error":
+            err_msg = str(kwargs.get("error_type") or "Tool execution failed")
+        elif isinstance(result, dict) and result.get("error"):
+            err_msg = str(result["error"])
+
+        if err_msg:
             context_args: Any = args
             try:
                 json.dumps(context_args, ensure_ascii=False)

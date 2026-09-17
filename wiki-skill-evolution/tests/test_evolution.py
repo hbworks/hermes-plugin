@@ -68,6 +68,51 @@ class TestWikiSkillEvolution(unittest.TestCase):
             self.plugin.on_post_tool_call(tool_name="bash", error=f"Error {i}")
         self.assertEqual(len(self.plugin.recent_errors), 50)
 
+    def test_post_tool_call_capture_supports_hermes_error_kwargs_and_result(self):
+        """Should capture Hermes hook error fields and tool-result errors."""
+        cases = [
+            (
+                "hermes_error_message",
+                {"error_message": "Some Error", "status": "error"},
+                None,
+                "Some Error",
+            ),
+            (
+                "hermes_status_with_type",
+                {"status": "error", "error_type": "RuntimeError"},
+                None,
+                "RuntimeError",
+            ),
+            (
+                "tool_result_error",
+                {},
+                {"error": "Some Error"},
+                "Some Error",
+            ),
+        ]
+
+        log_path = self.hermes_home / "logs" / "evolution_errors.jsonl"
+        for tool_name, hook_kwargs, result, expected_error in cases:
+            with self.subTest(tool_name=tool_name):
+                self.plugin.on_post_tool_call(
+                    tool_name=tool_name,
+                    args={"case": tool_name},
+                    result=result,
+                    **hook_kwargs,
+                )
+
+                self.assertEqual(self.plugin.recent_errors[-1]["tool"], tool_name)
+                self.assertEqual(self.plugin.recent_errors[-1]["error"], expected_error)
+
+        persisted_records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(
+            [record["error"] for record in persisted_records[-len(cases):]],
+            [case[3] for case in cases],
+        )
+
     def test_error_log_persists_and_is_loaded_with_lookback(self):
         """Should persist errors and ignore records outside the requested window."""
         self.plugin.on_post_tool_call(tool_name="git_status", args={"command": "git status"}, error="Permission denied")
