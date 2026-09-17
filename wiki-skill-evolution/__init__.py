@@ -7,10 +7,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from .main import (
-    RUN_EVOLUTION_SCHEMA,
-    WikiSkillEvolutionPlugin,
-)
+try:
+    from .main import (
+        RUN_EVOLUTION_SCHEMA,
+        WikiSkillEvolutionPlugin,
+    )
+except ImportError:
+    from main import (
+        RUN_EVOLUTION_SCHEMA,
+        WikiSkillEvolutionPlugin,
+    )
 
 
 def register(ctx: Any) -> None:
@@ -22,7 +28,9 @@ def register(ctx: Any) -> None:
         name="run_wiki_skill_evolution",
         toolset="wiki-skill-evolution",
         schema=RUN_EVOLUTION_SCHEMA,
-        handler=plugin.handle_tool_call,
+        handler=lambda args, **kwargs: plugin.handle_tool_call(
+            "run_wiki_skill_evolution", args, **kwargs
+        ),
     )
 
     # 2. フック登録 (公式 VALID_HOOKS: post_tool_call, on_session_end)
