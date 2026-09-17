@@ -13,7 +13,8 @@ plugin_dir = Path(__file__).resolve().parent.parent
 if str(plugin_dir) not in sys.path:
     sys.path.insert(0, str(plugin_dir))
 
-from main import WikiSkillEvolutionPlugin, ERROR_RULES
+from main import RUN_EVOLUTION_SCHEMA, WikiSkillEvolutionPlugin, ERROR_RULES
+from __init__ import register
 
 
 class TestWikiSkillEvolution(unittest.TestCase):
@@ -28,6 +29,29 @@ class TestWikiSkillEvolution(unittest.TestCase):
         os.environ.pop("HERMES_HOME", None)
         os.environ.pop("HERMES_PROFILE", None)
         shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_registers_hermes_tool_contract(self):
+        """Should register a flat schema and an args-only Hermes handler."""
+        registrations = []
+
+        class Context:
+            def register_tool(self, **kwargs):
+                registrations.append(kwargs)
+
+            def register_hook(self, *args):
+                pass
+
+        register(Context())
+
+        self.assertEqual(len(registrations), 1)
+        tool = registrations[0]
+        self.assertEqual(tool["schema"], RUN_EVOLUTION_SCHEMA)
+        self.assertIn("description", tool["schema"])
+        self.assertIn("parameters", tool["schema"])
+        self.assertNotIn("function", tool["schema"])
+
+        result = json.loads(tool["handler"]({"dry_run": True}))
+        self.assertIn("status", result)
 
     def test_error_rule_classification(self):
         """Should classify known tool errors into actionable lessons."""

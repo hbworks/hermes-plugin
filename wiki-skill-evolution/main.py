@@ -64,27 +64,23 @@ ERROR_RULES = [
 
 # Tool Schema for run_wiki_skill_evolution
 RUN_EVOLUTION_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "run_wiki_skill_evolution",
-        "description": "Trigger the WikiSkill autonomous evolution cycle: analyze recent errors, extract lessons into wiki/memory, and update target skill if tests pass.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "skill_name": {
-                    "type": "string",
-                    "description": "The skill name to evolve. If omitted, infer it from the recent error context.",
-                },
-                "hours": {
-                    "type": "integer",
-                    "description": "Lookback window in hours for error logs (default 6).",
-                    "default": 6,
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "If true, propose patch without applying git commit.",
-                    "default": False,
-                },
+    "description": "Trigger the WikiSkill autonomous evolution cycle: analyze recent errors, extract lessons into wiki/memory, and update target skill if tests pass.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "skill_name": {
+                "type": "string",
+                "description": "The skill name to evolve. If omitted, infer it from the recent error context.",
+            },
+            "hours": {
+                "type": "integer",
+                "description": "Lookback window in hours for error logs (default 6).",
+                "default": 6,
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "If true, propose patch without applying git commit.",
+                "default": False,
             },
         },
     },
