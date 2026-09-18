@@ -462,9 +462,15 @@ function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizePricingModel(value) {
+    const modelKey = normalizeText(value)
+    const separator = modelKey.lastIndexOf('/')
+    return separator === -1 ? modelKey : modelKey.slice(separator + 1)
+}
+
 function getPricing(provider, model) {
     const providerKey = normalizeText(provider).toLowerCase()
-    const modelKey = normalizeText(model)
+    const modelKey = normalizePricingModel(model)
     if (!providerKey || !modelKey) {
         return null
     }
@@ -473,7 +479,7 @@ function getPricing(provider, model) {
 }
 
 function getPricingByModel(model) {
-    const modelKey = normalizeText(model)
+    const modelKey = normalizePricingModel(model)
     if (!modelKey) {
         return null
     }
@@ -584,8 +590,8 @@ function calculateCost({ sessionId = null, provider = '', model = '', usage = nu
     const normalizedSessionId = normalizeText(sessionId) || null
     const reportedCost = finiteNonNegative(usage?.cost_usd)
     const pricing = getPricing(normalizedProvider, normalizedModel) ||
-        (!normalizedProvider ? getPricingByModel(normalizedModel) : null)
-    const resolvedProvider = normalizedProvider || pricing?.provider || ''
+        getPricingByModel(normalizedModel)
+    const resolvedProvider = pricing?.provider || normalizedProvider
 
     if (reportedCost !== null) {
         return {

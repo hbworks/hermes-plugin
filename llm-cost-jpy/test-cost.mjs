@@ -142,6 +142,14 @@ assert.equal(missingProvider.amountUsd, 1.4)
 assert.equal(missingProvider.provider, 'openai-api')
 assert.equal(missingProvider.status, 'estimated')
 
+const namespacedModel = calculateCost({
+    model: 'openai/gpt-5.6-luna',
+    usage: { input: 1_000_000, output: 1_000_000 }
+})
+assert.equal(namespacedModel.amountUsd, 1.4)
+assert.equal(namespacedModel.provider, 'openai-api')
+assert.equal(namespacedModel.status, 'estimated')
+
 const inferredGeminiProvider = calculateCost({
     model: 'gemini-3.8-flash',
     usage: { input: 1_000_000, output: 1_000_000 }
@@ -150,13 +158,14 @@ assert.equal(inferredGeminiProvider.amountUsd, 4.5)
 assert.equal(inferredGeminiProvider.provider, 'gemini')
 assert.equal(inferredGeminiProvider.status, 'estimated')
 
-const aggregateProvider = calculateCost({
+const unavailableProvider = calculateCost({
     model: 'claude-opus-5',
     provider: 'copilot-acp',
     usage: { input: 1_000_000, output: 1_000_000 }
 })
-assert.equal(aggregateProvider.amountUsd, null)
-assert.equal(aggregateProvider.status, 'unknown')
+assert.equal(unavailableProvider.amountUsd, 30)
+assert.equal(unavailableProvider.provider, 'anthropic')
+assert.equal(unavailableProvider.status, 'estimated')
 
 const sessionB = calculateCost({
     model: 'gpt-5.6-luna',

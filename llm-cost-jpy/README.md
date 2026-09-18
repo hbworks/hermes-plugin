@@ -101,7 +101,7 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 
 - Hermesの有限な`focusedUsage.cost_usd`を最優先します。値が`0`の場合は`Included`として扱います。
 - `cost_usd`がない場合、公開されているprovider/modelの固定料金表と`input`、`output`から推定します。
-- 現行SDKでproviderが取得できない場合、モデル名が固定料金表上で一意に対応するときだけ、そのproviderを補完します。複数providerに同名モデルがある場合や、モデルが料金表にない場合は`Cost n/a`にします。`focusedSessionProfile`をproviderとして推測しません。
+- 現行SDKでproviderが取得できない場合、または取得したproviderに料金表上の一致がない場合は、モデル名が固定料金表上で一意に対応するときだけ公式API料金のproviderを補完します。`openai/gpt-5.6-luna`のようなprovider接頭辞付きモデル名は接頭辞を除いて照合します。複数providerに同名モデルがある場合や、モデルが料金表にない場合は`Cost n/a`にします。`focusedSessionProfile`をproviderとして推測しません。
 - 公開されている`host.state.model`はmain modelであり、フォーカス中タイル固有のmodelではありません。main runtimeと異なるタイルではmodelを推測せず、固定料金によるフォールバックを停止します。
 - キャッシュ内訳が明示された入力を純粋関数へ渡した場合だけ、通常入力・キャッシュ読み取り・キャッシュ書き込みを別単価で計算します。Anthropicの`cache_read_input_tokens`と`cache_creation_input_tokens`も読み取ります。現行のHermes使用量では入力全体を通常入力として推定します。
 - `total`やreasoning tokensは入力・出力へ重複加算しません。
