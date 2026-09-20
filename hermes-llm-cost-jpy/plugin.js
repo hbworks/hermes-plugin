@@ -12,9 +12,11 @@ import {
     useValue
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
+/* BEGIN GENERATED COST LOGIC */
 const MILLION = 1_000_000
+const JPY_DECIMAL_PLACES = 2
 
 const OPENAI_PRICING_URL = 'https://developers.openai.com/api/docs/pricing'
 const GEMINI_PRICING_URL = 'https://ai.google.dev/gemini-api/docs/pricing'
@@ -491,6 +493,114 @@ function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : ''
 }
 
+function resolveModelForUsage({ currentModel = '', focusedTile = false, usage = null } = {}) {
+    const usageModel = normalizeText(usage?.model)
+    return usageModel || (focusedTile ? '' : normalizeText(currentModel))
+}
+
+function canPersistCostHistory({ amountUsd = null, sessionId = '', usage = null } = {}) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const usageSessionId = normalizeText(usage?.sessionId || usage?.session_id)
+    return Boolean(
+        normalizedSessionId &&
+        finiteNonNegative(amountUsd) !== null &&
+        (!usageSessionId || usageSessionId === normalizedSessionId)
+    )
+}
+
+function serializeHistoryPricing(pricing) {
+    if (!pricing || typeof pricing !== 'object') {
+        return null
+    }
+
+    return {
+        checkedAt: normalizeText(pricing.checkedAt),
+        model: normalizeText(pricing.model),
+        provider: normalizeText(pricing.provider),
+        sourceUrl: normalizeText(pricing.sourceUrl)
+    }
+}
+
+function createCostHistoryRecord(sessionId, result, updatedAt = Date.now()) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const amountUsd = finiteNonNegative(result?.amountUsd)
+    if (!normalizedSessionId || amountUsd === null) {
+        return null
+    }
+
+    return {
+        amountUsd,
+        model: normalizeText(result?.model),
+        pricing: serializeHistoryPricing(result?.pricing),
+        provider: normalizeText(result?.provider),
+        sessionId: normalizedSessionId,
+        status: normalizeText(result?.status) || 'unknown',
+        updatedAt: finiteNonNegative(updatedAt) ?? Date.now()
+    }
+}
+
+function normalizeCostHistory(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {}
+    }
+
+    const records = Object.entries(value)
+        .map(([sessionId, record]) => {
+            const normalized = createCostHistoryRecord(sessionId, record, record?.updatedAt)
+            return normalized ? [sessionId, normalized] : null
+        })
+        .filter(record => record !== null)
+        .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
+        .slice(0, MAX_COST_HISTORY_ENTRIES)
+
+    return Object.fromEntries(records)
+}
+
+function upsertCostHistory(history, sessionId, result, updatedAt = Date.now()) {
+    const normalizedHistory = normalizeCostHistory(history)
+    const record = createCostHistoryRecord(sessionId, result, updatedAt)
+    if (!record) {
+        return normalizedHistory
+    }
+
+    const existing = normalizedHistory[record.sessionId]
+    if (existing && JSON.stringify({ ...existing, updatedAt: 0 }) === JSON.stringify({ ...record, updatedAt: 0 })) {
+        return normalizedHistory
+    }
+
+    return normalizeCostHistory({
+        ...normalizedHistory,
+        [record.sessionId]: record
+    })
+}
+
+function getCostHistoryEntries(history) {
+    if (!history || typeof history !== 'object' || Array.isArray(history)) {
+        return []
+    }
+
+    return Object.values(history)
+}
+
+function historyResultForSession(history, sessionId) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const record = history && typeof history === 'object' && !Array.isArray(history)
+        ? history[normalizedSessionId]
+        : null
+    if (!record) {
+        return null
+    }
+
+    return {
+        amountUsd: record.amountUsd,
+        model: record.model,
+        pricing: record.pricing,
+        provider: record.provider,
+        sessionId: normalizedSessionId,
+        status: record.status
+    }
+}
+
 function normalizePricingModel(value) {
     const modelKey = normalizeText(value).toLowerCase()
     const separator = modelKey.lastIndexOf('/')
@@ -669,7 +779,12 @@ function calculateCost({ sessionId = null, provider = '', model = '', usage = nu
 
 function formatJpy(amount) {
     const numeric = finiteNonNegative(amount)
-    return numeric === null ? '¥—' : `¥${Math.round(numeric).toLocaleString('ja-JP')}`
+    return numeric === null
+        ? '¥—'
+        : `¥${numeric.toLocaleString('ja-JP', {
+            maximumFractionDigits: JPY_DECIMAL_PLACES,
+            minimumFractionDigits: JPY_DECIMAL_PLACES
+        })}`
 }
 
 function formatUsd(amount) {
@@ -684,10 +799,12 @@ function formatUsd(amount) {
         style: 'currency'
     }).format(numeric)
 }
+/* END GENERATED COST LOGIC */
 
 const ID = 'hermes-llm-cost-jpy'
 const STORAGE_KEY = 'usd_jpy_rate'
 const COST_HISTORY_STORAGE_KEY = 'session_cost_history'
+const MAX_VISIBLE_COST_HISTORY_ENTRIES = 10
 const EMPTY_USAGE = atom(null)
 const EMPTY_STRING = atom('')
 const EMPTY_OWNER = atom(null)
@@ -695,6 +812,7 @@ const EMPTY_OWNER = atom(null)
 const usageAtom = host.state?.focusedUsage || EMPTY_USAGE
 const modelAtom = host.state?.model || EMPTY_STRING
 const providerAtom = host.state?.focusedProvider || host.state?.provider || EMPTY_STRING
+const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile || EMPTY_STRING
 const ownerAtom = host.state?.focusedSessionOwner || EMPTY_OWNER
 const activeSessionIdAtom = host.state?.activeSessionId || EMPTY_STRING
 const storedSessionIdAtom = host.state?.focusedStoredSessionId || EMPTY_STRING
@@ -757,98 +875,6 @@ function normalizeModel(value) {
     return typeof value === 'string' ? value.trim() : ''
 }
 
-function resolveModelForUsage({ currentModel = '', focusedTile = false, usage = null } = {}) {
-    const usageModel = normalizeModel(usage?.model)
-    return usageModel || (focusedTile ? '' : normalizeModel(currentModel))
-}
-
-function serializeHistoryPricing(pricing) {
-    if (!pricing || typeof pricing !== 'object') {
-        return null
-    }
-
-    return {
-        checkedAt: normalizeText(pricing.checkedAt),
-        model: normalizeText(pricing.model),
-        provider: normalizeText(pricing.provider),
-        sourceUrl: normalizeText(pricing.sourceUrl)
-    }
-}
-
-function createCostHistoryRecord(sessionId, result, updatedAt = Date.now()) {
-    const normalizedSessionId = normalizeText(sessionId)
-    const amountUsd = finiteNonNegative(result?.amountUsd)
-    if (!normalizedSessionId || amountUsd === null) {
-        return null
-    }
-
-    return {
-        amountUsd,
-        model: normalizeText(result?.model),
-        pricing: serializeHistoryPricing(result?.pricing),
-        provider: normalizeText(result?.provider),
-        sessionId: normalizedSessionId,
-        status: normalizeText(result?.status) || 'unknown',
-        updatedAt: finiteNonNegative(updatedAt) ?? Date.now()
-    }
-}
-
-function normalizeCostHistory(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return {}
-    }
-
-    const records = Object.entries(value)
-        .map(([sessionId, record]) => {
-            const normalized = createCostHistoryRecord(sessionId, record, record?.updatedAt)
-            return normalized ? [sessionId, normalized] : null
-        })
-        .filter(record => record !== null)
-        .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
-        .slice(0, MAX_COST_HISTORY_ENTRIES)
-
-    return Object.fromEntries(records)
-}
-
-function upsertCostHistory(history, sessionId, result, updatedAt = Date.now()) {
-    const normalizedHistory = normalizeCostHistory(history)
-    const record = createCostHistoryRecord(sessionId, result, updatedAt)
-    if (!record) {
-        return normalizedHistory
-    }
-
-    const existing = normalizedHistory[record.sessionId]
-    if (existing && JSON.stringify({ ...existing, updatedAt: 0 }) === JSON.stringify({ ...record, updatedAt: 0 })) {
-        return normalizedHistory
-    }
-
-    return normalizeCostHistory({
-        ...normalizedHistory,
-        [record.sessionId]: record
-    })
-}
-
-function getCostHistoryEntries(history) {
-    return Object.values(normalizeCostHistory(history))
-}
-
-function historyResultForSession(history, sessionId) {
-    const normalizedSessionId = normalizeText(sessionId)
-    const record = normalizeCostHistory(history)[normalizedSessionId]
-    if (!record) {
-        return null
-    }
-
-    return {
-        amountUsd: record.amountUsd,
-        model: record.model,
-        pricing: record.pricing,
-        provider: record.provider,
-        sessionId: normalizedSessionId,
-        status: record.status
-    }
-}
-
 function normalizeSessionId(value) {
     return typeof value === 'string' ? value.trim() : ''
 }
@@ -908,11 +934,79 @@ function HistoryRow({ rate, record }) {
     })
 }
 
+function CostDetails({ jpyValue, ownerLabel, providerLabel, rate, result, sessionId, sourceUrl, t }) {
+    return jsxs('div', {
+        className: 'flex flex-col gap-1.5 text-xs',
+        children: [
+            jsx('div', { className: 'mb-1 text-sm font-medium text-(--ui-text-primary)', children: t('detail.title') }),
+            jsx(DetailRow, { label: t('detail.usd'), value: result.amountUsd === null ? t('detail.unavailable') : formatUsd(result.amountUsd) }),
+            jsx(DetailRow, { label: t('detail.jpy'), value: jpyValue }),
+            jsx(DetailRow, { label: t('detail.rate'), value: rate === null ? t('detail.unset') : `${formatJpy(rate)} / $1` }),
+            jsx(DetailRow, { label: t('detail.provider'), value: providerLabel }),
+            jsx(DetailRow, { label: t('detail.model'), value: result.model || t('detail.unavailable') }),
+            jsx(DetailRow, { label: t('detail.profile'), value: ownerLabel }),
+            jsx(DetailRow, { label: t('detail.session'), value: sessionId || t('detail.unavailable') }),
+            jsx(DetailRow, { label: t('detail.status'), value: t(`status.${result.status}`) }),
+            jsx(DetailRow, { label: t('detail.checkedAt'), value: result.pricing?.checkedAt || t('detail.unavailable') }),
+            sourceUrl && jsx('a', { className: 'mt-1 break-all text-(--ui-accent)', href: sourceUrl, rel: 'noreferrer', target: '_blank', children: sourceUrl })
+        ]
+    })
+}
+
+function CostHistorySection({ entries, rate, t }) {
+    return jsxs('div', {
+        className: 'flex flex-col gap-2',
+        children: [
+            jsx('div', { className: 'text-xs font-medium text-(--ui-text-primary)', children: t('history.title') }),
+            entries.length === 0
+                ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('history.empty') })
+                : jsx('div', {
+                    className: 'max-h-48 overflow-y-auto pr-1',
+                    children: entries.map(record => jsx(HistoryRow, { key: record.sessionId, rate, record }))
+                })
+        ]
+    })
+}
+
+function RateSettings({ draftRate, error, historyCount, onClearHistory, onClearRate, onDraftRateChange, onSave, t, rate }) {
+    return jsxs('div', {
+        className: 'flex flex-col gap-2',
+        children: [
+            jsx('div', { className: 'text-xs font-medium text-(--ui-text-primary)', children: t('settings.title') }),
+            jsx(Input, {
+                'aria-label': t('settings.rateLabel'),
+                inputMode: 'decimal',
+                onChange: onDraftRateChange,
+                onKeyDown: event => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault()
+                        onSave()
+                    }
+                },
+                placeholder: t('settings.placeholder'),
+                type: 'number',
+                value: draftRate
+            }),
+            error && jsx('div', { className: 'text-xs text-(--ui-danger)', children: error }),
+            jsxs('div', {
+                className: 'flex items-center gap-2',
+                children: [
+                    jsx(Button, { onClick: onSave, size: 'sm', type: 'button', children: t('settings.save') }),
+                    jsx(Button, { disabled: rate === null, onClick: onClearRate, size: 'sm', type: 'button', variant: 'ghost', children: t('settings.clear') }),
+                    jsx(Button, { disabled: historyCount === 0, onClick: onClearHistory, size: 'sm', type: 'button', variant: 'ghost', children: t('settings.clearHistory') })
+                ]
+            }),
+            jsx('div', { className: 'text-[0.6875rem] leading-relaxed text-(--ui-text-tertiary)', children: t('settings.note') })
+        ]
+    })
+}
+
 function CostStatusbar({ controller }) {
     const t = usePluginI18n(ID)
     const usage = useValue(usageAtom)
     const currentModel = normalizeModel(useValue(modelAtom))
     const provider = normalizeProvider(useValue(providerAtom))
+    const focusedProfile = normalizeText(useValue(focusedProfileAtom))
     const owner = useValue(ownerAtom)
     const activeSessionId = normalizeSessionId(useValue(activeSessionIdAtom))
     const storedSessionId = normalizeSessionId(useValue(storedSessionIdAtom))
@@ -933,7 +1027,9 @@ function CostStatusbar({ controller }) {
             (calculatedResult.status === 'included' && !calculatedResult.pricing))
     )
     const result = useHistoricalResult ? historicalResult : calculatedResult
-    const historyEntries = getCostHistoryEntries(history)
+    const historyEntries = getCostHistoryEntries(history).slice(0, MAX_VISIBLE_COST_HISTORY_ENTRIES)
+    const previousSessionIdRef = useRef(historySessionId)
+    const persistedSnapshotRef = useRef('')
     const [draftRate, setDraftRate] = useState(() => rate === null ? '' : String(rate))
     const [error, setError] = useState('')
 
@@ -942,10 +1038,33 @@ function CostStatusbar({ controller }) {
     }, [rate])
 
     useEffect(() => {
-        if (historySessionId && calculatedResult.amountUsd !== null) {
-            controller.recordCost(historySessionId, calculatedResult)
+        const usageSessionId = normalizeSessionId(usage?.sessionId || usage?.session_id)
+        if (!canPersistCostHistory({ amountUsd: calculatedResult.amountUsd, sessionId: historySessionId, usage })) {
+            return
         }
-    }, [calculatedResult.amountUsd, calculatedResult.model, calculatedResult.pricing?.checkedAt, calculatedResult.pricing?.sourceUrl, calculatedResult.provider, calculatedResult.status, controller, historySessionId])
+
+        const sessionChanged = previousSessionIdRef.current !== historySessionId
+        previousSessionIdRef.current = historySessionId
+        if (sessionChanged && !usageSessionId) {
+            persistedSnapshotRef.current = ''
+            return
+        }
+
+        const snapshot = JSON.stringify({
+            amountUsd: calculatedResult.amountUsd,
+            model: calculatedResult.model,
+            provider: calculatedResult.provider,
+            sessionId: historySessionId,
+            status: calculatedResult.status
+        })
+        if (persistedSnapshotRef.current === snapshot) {
+            return
+        }
+
+        if (controller.recordCost(historySessionId, calculatedResult)) {
+            persistedSnapshotRef.current = snapshot
+        }
+    }, [calculatedResult.amountUsd, calculatedResult.model, calculatedResult.provider, calculatedResult.status, controller, historySessionId, usage])
 
     const saveRate = () => {
         if (!controller.setRate(draftRate)) {
@@ -967,7 +1086,6 @@ function CostStatusbar({ controller }) {
         setError('')
     }
 
-    const statusLabel = t(`status.${result.status}`)
     const statusbarLabel = getStatusbarLabel(t, result, rate)
     const providerLabel = result.provider || provider || t('detail.unavailable')
     const jpyValue = result.amountUsd === null
@@ -978,8 +1096,8 @@ function CostStatusbar({ controller }) {
                 ? t('detail.rateUnset')
                 : formatJpy(result.amountUsd * rate)
     const ownerLabel = owner?.connectionId
-        ? `${owner.connectionId} / ${owner.profile || t('detail.unavailable')}`
-        : owner?.profile || t('detail.unavailable')
+        ? `${owner.connectionId} / ${owner.profile || focusedProfile || t('detail.unavailable')}`
+        : owner?.profile || focusedProfile || t('detail.unavailable')
     const sourceUrl = result.pricing?.sourceUrl || ''
     const title = result.status === 'unknown'
         ? t('statusbar.unknown')
@@ -1001,65 +1119,20 @@ function CostStatusbar({ controller }) {
                 align: 'end',
                 className: 'w-80 p-3',
                 children: [
-                    jsxs('div', {
-                        className: 'flex flex-col gap-1.5 text-xs',
-                        children: [
-                            jsx('div', { className: 'mb-1 text-sm font-medium text-(--ui-text-primary)', children: t('detail.title') }),
-                            jsx(DetailRow, { label: t('detail.usd'), value: result.amountUsd === null ? t('detail.unavailable') : formatUsd(result.amountUsd) }),
-                            jsx(DetailRow, { label: t('detail.jpy'), value: jpyValue }),
-                            jsx(DetailRow, { label: t('detail.rate'), value: rate === null ? t('detail.unset') : `${formatJpy(rate)} / $1` }),
-                            jsx(DetailRow, { label: t('detail.provider'), value: providerLabel }),
-                            jsx(DetailRow, { label: t('detail.model'), value: result.model || t('detail.unavailable') }),
-                            jsx(DetailRow, { label: t('detail.profile'), value: ownerLabel }),
-                            jsx(DetailRow, { label: t('detail.session'), value: sessionId || t('detail.unavailable') }),
-                            jsx(DetailRow, { label: t('detail.status'), value: statusLabel }),
-                            jsx(DetailRow, { label: t('detail.checkedAt'), value: result.pricing?.checkedAt || t('detail.unavailable') }),
-                            sourceUrl && jsx('a', { className: 'mt-1 break-all text-(--ui-accent)', href: sourceUrl, rel: 'noreferrer', target: '_blank', children: sourceUrl })
-                        ]
-                    }),
+                    jsx(CostDetails, { jpyValue, ownerLabel, providerLabel, rate, result, sessionId, sourceUrl, t }),
                     jsx(DropdownMenuSeparator, { className: 'my-3' }),
-                    jsxs('div', {
-                        className: 'flex flex-col gap-2',
-                        children: [
-                            jsx('div', { className: 'text-xs font-medium text-(--ui-text-primary)', children: t('history.title') }),
-                            historyEntries.length === 0
-                                ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('history.empty') })
-                                : jsx('div', {
-                                    className: 'max-h-48 overflow-y-auto pr-1',
-                                    children: historyEntries.map(record => jsx(HistoryRow, { key: record.sessionId, rate, record }))
-                                })
-                        ]
-                    }),
+                    jsx(CostHistorySection, { entries: historyEntries, rate, t }),
                     jsx(DropdownMenuSeparator, { className: 'my-3' }),
-                    jsxs('div', {
-                        className: 'flex flex-col gap-2',
-                        children: [
-                            jsx('div', { className: 'text-xs font-medium text-(--ui-text-primary)', children: t('settings.title') }),
-                            jsx(Input, {
-                                'aria-label': t('settings.rateLabel'),
-                                inputMode: 'decimal',
-                                onChange: event => setDraftRate(event.target.value),
-                                onKeyDown: event => {
-                                    if (event.key === 'Enter') {
-                                        event.preventDefault()
-                                        saveRate()
-                                    }
-                                },
-                                placeholder: t('settings.placeholder'),
-                                type: 'number',
-                                value: draftRate
-                            }),
-                            error && jsx('div', { className: 'text-xs text-(--ui-danger)', children: error }),
-                            jsxs('div', {
-                                className: 'flex items-center gap-2',
-                                children: [
-                                    jsx(Button, { onClick: saveRate, size: 'sm', type: 'button', children: t('settings.save') }),
-                                    jsx(Button, { disabled: rate === null, onClick: clearRate, size: 'sm', type: 'button', variant: 'ghost', children: t('settings.clear') }),
-                                    jsx(Button, { disabled: Object.keys(history).length === 0, onClick: clearCostHistory, size: 'sm', type: 'button', variant: 'ghost', children: t('settings.clearHistory') })
-                                ]
-                            }),
-                            jsx('div', { className: 'text-[0.6875rem] leading-relaxed text-(--ui-text-tertiary)', children: t('settings.note') })
-                        ]
+                    jsx(RateSettings, {
+                        draftRate,
+                        error,
+                        historyCount: Object.keys(history).length,
+                        onClearHistory: clearCostHistory,
+                        onClearRate: clearRate,
+                        onDraftRateChange: event => setDraftRate(event.target.value),
+                        onSave: saveRate,
+                        rate,
+                        t
                     })
                 ]
             })

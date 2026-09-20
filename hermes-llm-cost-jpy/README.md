@@ -124,11 +124,12 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 - キャッシュ内訳が明示された入力を純粋関数へ渡した場合だけ、通常入力・キャッシュ読み取り・キャッシュ書き込みを別単価で計算します。Anthropicの`cache_read_input_tokens`と`cache_creation_input_tokens`も読み取ります。現行のHermes使用量では入力全体を通常入力として推定します。
 - `total`やreasoning tokensは入力・出力へ重複加算しません。
 - 固定料金表にないprovider/modelは`Cost n/a`であり、`¥0`にはしません。
-- セッションIDは`focusedStoredSessionId`を優先し、永続IDがまだ確定していない場合だけruntime IDを一時キーとして使います。有効なコストをUSDスナップショットとしてプラグインの`ctx.storage`へ最大200件保存し、履歴表示時のJPYは現在の換算レートから再計算します。履歴は設定欄のクリア操作で削除できます。
+- セッションIDは`focusedStoredSessionId`を優先し、永続IDがまだ確定していない場合だけruntime IDを一時キーとして使います。usageにセッションIDが含まれる場合は表示中IDと一致するときだけ保存します。有効なコストをUSDスナップショットとしてプラグインの`ctx.storage`へ最大200件保存し、履歴には最新10件を表示します。履歴表示時のJPYは現在の換算レートから再計算し、設定欄のクリア操作で削除できます。
 
 ## 検証
 
 ```bash
+node hermes-llm-cost-jpy/scripts/sync-cost-runtime.mjs --check
 node --check hermes-llm-cost-jpy/plugin.js
 node hermes-llm-cost-jpy/test-cost.mjs
 ```

@@ -1,4 +1,5 @@
 const MILLION = 1_000_000
+const JPY_DECIMAL_PLACES = 2
 
 const OPENAI_PRICING_URL = 'https://developers.openai.com/api/docs/pricing'
 const GEMINI_PRICING_URL = 'https://ai.google.dev/gemini-api/docs/pricing'
@@ -480,6 +481,16 @@ export function resolveModelForUsage({ currentModel = '', focusedTile = false, u
     return usageModel || (focusedTile ? '' : normalizeText(currentModel))
 }
 
+export function canPersistCostHistory({ amountUsd = null, sessionId = '', usage = null } = {}) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const usageSessionId = normalizeText(usage?.sessionId || usage?.session_id)
+    return Boolean(
+        normalizedSessionId &&
+        finiteNonNegative(amountUsd) !== null &&
+        (!usageSessionId || usageSessionId === normalizedSessionId)
+    )
+}
+
 function serializeHistoryPricing(pricing) {
     if (!pricing || typeof pricing !== 'object') {
         return null
@@ -547,12 +558,18 @@ export function upsertCostHistory(history, sessionId, result, updatedAt = Date.n
 }
 
 export function getCostHistoryEntries(history) {
-    return Object.values(normalizeCostHistory(history))
+    if (!history || typeof history !== 'object' || Array.isArray(history)) {
+        return []
+    }
+
+    return Object.values(history)
 }
 
 export function historyResultForSession(history, sessionId) {
     const normalizedSessionId = normalizeText(sessionId)
-    const record = normalizeCostHistory(history)[normalizedSessionId]
+    const record = history && typeof history === 'object' && !Array.isArray(history)
+        ? history[normalizedSessionId]
+        : null
     if (!record) {
         return null
     }
@@ -745,7 +762,12 @@ export function calculateCost({ sessionId = null, provider = '', model = '', usa
 
 export function formatJpy(amount) {
     const numeric = finiteNonNegative(amount)
-    return numeric === null ? '¥—' : `¥${Math.round(numeric).toLocaleString('ja-JP')}`
+    return numeric === null
+        ? '¥—'
+        : `¥${numeric.toLocaleString('ja-JP', {
+            maximumFractionDigits: JPY_DECIMAL_PLACES,
+            minimumFractionDigits: JPY_DECIMAL_PLACES
+        })}`
 }
 
 export function formatUsd(amount) {

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import {
     calculateCost,
     calculateEstimatedUsd,
+    canPersistCostHistory,
     createCostHistoryRecord,
     formatJpy,
     getCostHistoryEntries,
@@ -130,7 +131,10 @@ for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, '']) {
     assert.equal(normalizeRate(invalid), null)
 }
 assert.equal(normalizeRate('150.25'), 150.25)
-assert.equal(formatJpy(198.4), '¥198')
+assert.equal(formatJpy(198.4), '¥198.40')
+assert.equal(canPersistCostHistory({ amountUsd: 1, sessionId: 'session-a', usage: { session_id: 'session-a' } }), true)
+assert.equal(canPersistCostHistory({ amountUsd: 1, sessionId: 'session-a', usage: { session_id: 'session-b' } }), false)
+assert.equal(canPersistCostHistory({ amountUsd: 1, sessionId: 'session-a', usage: {} }), true)
 assert.equal(
     resolveModelForUsage({
         currentModel: 'main-model',
