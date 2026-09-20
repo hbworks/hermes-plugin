@@ -1,12 +1,12 @@
-# LLM Cost JPY
+# Hermes LLM Cost JPY
 
 Hermes Desktopのフォーカス中セッションについて、SDKが提供する使用量からLLMコストを推定または表示し、日本円へ換算するStandalone Desktop Pluginです。
 
 ## 配置
 
 ```text
-$HERMES_HOME/desktop-plugins/llm-cost-jpy/plugin.js
-$HERMES_HOME/desktop-plugins/llm-cost-jpy/cost.mjs
+$HERMES_HOME/desktop-plugins/hermes-llm-cost-jpy/plugin.js
+$HERMES_HOME/desktop-plugins/hermes-llm-cost-jpy/cost.mjs
 ```
 
 配置後、Hermes Desktopのプラグインを再読み込みしてください。
@@ -19,7 +19,7 @@ Runtime pluginのentrypointは`plugin.js`単体です。Hermes Desktopのloader�
 
 ## 固定料金表
 
-料金はすべて公式のStandard料金です。Batch、Flex、Fast/Priority、リージョン加算、音声・画像・動画専用料金は含めません。単位はUSD / 1M tokensです。
+料金は公式料金または公開料金情報に基づく概算です。Batch、Flex、Fast/Priority、リージョン加算、音声・画像・動画専用料金は含めません。単位はUSD / 1M tokensです。
 
 ### OpenAI (`openai-api`)
 
@@ -75,6 +75,22 @@ OpenAIの長文脈料金は、明示的に`long_context === true`または`prici
 
 `gemini-3.1-pro-preview`と`gemini-2.5-pro`は、明示long tierでそれぞれ`$4.00 / $0.40 / $18.00`と`$2.50 / $0.25 / $15.00`を使います。Geminiのcache storage時間料金、音声専用料金、画像・動画の専用単価はこのtoken計算へ混ぜません。
 
+### LongCat (`longcat`)
+
+| Model | Input / 1M | Cached input / 1M | Output / 1M |
+| --- | ---: | ---: | ---: |
+| `LongCat-2.0` | `$0.30` | `$0.006` | `$1.20` |
+
+`LongCat-2.0`のキャッシュ入力は、入力料金から98%割引された`$0.006 / 1M tokens`として概算します。`longcat-2-0`のようなArtificial AnalysisのURL由来のモデル表記や、`longcat-api`プロバイダーも同じ料金へ正規化します。
+
+### NVIDIA Nemotron (`nvidia`)
+
+| Model | Input / 1M | Cached input / 1M | Output / 1M |
+| --- | ---: | ---: | ---: |
+| `Nemotron 3 Super 120B A12B` | `$0.193` | `—` | `$0.65` |
+
+`nvidia/nemotron-3-super-120b-a12b`とURL由来の`nvidia-nemotron-3-super-120b-a12b`を同じモデルとして扱い、`nvidia-api`プロバイダーも同じ料金へ正規化します。Artificial Analysisに記載されるIntelligence Indexのタスクあたりコスト`$1.06`はベンチマーク指標のため、トークン単価の概算には使用しません。キャッシュ単価は未指定です。
+
 ### Anthropic (`anthropic`)
 
 | Model | Input / 1M | Cache read / 1M | 5m cache write / 1M | Output / 1M |
@@ -92,6 +108,8 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 - OpenAI: <https://developers.openai.com/api/docs/pricing>
 - Google Gemini: <https://ai.google.dev/gemini-api/docs/pricing>
 - Anthropic: <https://platform.claude.com/docs/en/about-claude/pricing>
+- LongCat: <https://artificialanalysis.ai/ja/models/longcat-2-0>
+- NVIDIA Nemotron: <https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b>
 
 確認日: `2026-09-18`
 
@@ -99,7 +117,7 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 
 ## 計算ルール
 
-- Hermesの有限な`focusedUsage.cost_usd`を最優先します。値が`0`の場合は`Included`として扱います。
+- Hermesの正の有限な`focusedUsage.cost_usd`を最優先します。`cost_usd`が`0`でも、料金表にモデル名があり`input`と`output`が有効なら固定料金から概算し、トークン情報がない場合だけ`Included`として扱います。
 - `cost_usd`がない場合、公開されているprovider/modelの固定料金表と`input`、`output`から推定します。
 - 現行SDKでproviderが取得できない場合、または取得したproviderに料金表上の一致がない場合は、モデル名が固定料金表上で一意に対応するときだけ公式API料金のproviderを補完します。`openai/gpt-5.6-luna`のようなprovider接頭辞付きモデル名は接頭辞を除いて照合します。複数providerに同名モデルがある場合や、モデルが料金表にない場合は`Cost n/a`にします。`focusedSessionProfile`をproviderとして推測しません。
 - 公開されている`host.state.model`はmain modelであり、フォーカス中タイル固有のmodelではありません。main runtimeと異なるタイルではmodelを推測せず、固定料金によるフォールバックを停止します。
@@ -111,8 +129,8 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 ## 検証
 
 ```bash
-node --check llm-cost-jpy/plugin.js
-node llm-cost-jpy/test-cost.mjs
+node --check hermes-llm-cost-jpy/plugin.js
+node hermes-llm-cost-jpy/test-cost.mjs
 ```
 
 Desktop上では、プラグイン再読み込み、レート設定、モデル変更、セッション切替、料金未登録モデルを確認してください。

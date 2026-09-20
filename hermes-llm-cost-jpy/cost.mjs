@@ -3,7 +3,19 @@ const MILLION = 1_000_000
 const OPENAI_PRICING_URL = 'https://developers.openai.com/api/docs/pricing'
 const GEMINI_PRICING_URL = 'https://ai.google.dev/gemini-api/docs/pricing'
 const ANTHROPIC_PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing'
+const LONGCAT_PRICING_URL = 'https://artificialanalysis.ai/ja/models/longcat-2-0'
+const NEMOTRON_PRICING_URL = 'https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b'
 const CHECKED_AT = '2026-09-18'
+
+const PRICING_MODEL_ALIASES = Object.freeze({
+    'longcat-2-0': 'longcat-2.0',
+    'nvidia-nemotron-3-super-120b-a12b': 'nemotron-3-super-120b-a12b'
+})
+
+const PRICING_PROVIDER_ALIASES = Object.freeze({
+    'longcat-api': 'longcat',
+    'nvidia-api': 'nvidia'
+})
 
 function createTier(inputUsdPerMillion, outputUsdPerMillion, cacheReadUsdPerMillion = null, cacheWriteUsdPerMillion = null) {
     return {
@@ -382,6 +394,21 @@ export const PRICING = Object.freeze({
         outputUsdPerMillion: 0.4,
         cacheReadUsdPerMillion: 0.01
     }),
+    'longcat/longcat-2.0': createPricing({
+        provider: 'longcat',
+        model: 'longcat-2.0',
+        sourceUrl: LONGCAT_PRICING_URL,
+        inputUsdPerMillion: 0.3,
+        outputUsdPerMillion: 1.2,
+        cacheReadUsdPerMillion: 0.006
+    }),
+    'nvidia/nemotron-3-super-120b-a12b': createPricing({
+        provider: 'nvidia',
+        model: 'nemotron-3-super-120b-a12b',
+        sourceUrl: NEMOTRON_PRICING_URL,
+        inputUsdPerMillion: 0.193,
+        outputUsdPerMillion: 0.65
+    }),
     'anthropic/claude-fable-5-1': createPricing({
         provider: 'anthropic',
         model: 'claude-fable-5-1',
@@ -447,9 +474,10 @@ function normalizeText(value) {
 }
 
 function normalizePricingModel(value) {
-    const modelKey = normalizeText(value)
+    const modelKey = normalizeText(value).toLowerCase()
     const separator = modelKey.lastIndexOf('/')
-    return separator === -1 ? modelKey : modelKey.slice(separator + 1)
+    const unprefixedModel = separator === -1 ? modelKey : modelKey.slice(separator + 1)
+    return PRICING_MODEL_ALIASES[unprefixedModel] || unprefixedModel
 }
 
 export function getPricing(provider, model) {
@@ -459,7 +487,8 @@ export function getPricing(provider, model) {
         return null
     }
 
-    return PRICING[`${providerKey}/${modelKey}`] || null
+    const providerAlias = PRICING_PROVIDER_ALIASES[providerKey] || providerKey
+    return PRICING[`${providerAlias}/${modelKey}`] || null
 }
 
 function getPricingByModel(model) {
@@ -577,18 +606,28 @@ export function calculateCost({ sessionId = null, provider = '', model = '', usa
         getPricingByModel(normalizedModel)
     const resolvedProvider = pricing?.provider || normalizedProvider
 
-    if (reportedCost !== null) {
+    if (reportedCost !== null && reportedCost > 0) {
         return {
             amountUsd: reportedCost,
             model: normalizedModel,
             pricing,
             provider: resolvedProvider,
             sessionId: normalizedSessionId,
-            status: reportedCost === 0 ? 'included' : 'provider-reported'
+            status: 'provider-reported'
         }
     }
 
     const estimatedCost = calculateEstimatedUsd(usage, pricing)
+    if (reportedCost === 0 && estimatedCost === null) {
+        return {
+            amountUsd: 0,
+            model: normalizedModel,
+            pricing,
+            provider: resolvedProvider,
+            sessionId: normalizedSessionId,
+            status: 'included'
+        }
+    }
     if (estimatedCost === null) {
         return {
             amountUsd: null,

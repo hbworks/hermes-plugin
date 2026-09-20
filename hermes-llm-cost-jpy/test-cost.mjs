@@ -95,6 +95,32 @@ assert.equal(
     6
 )
 
+const longCatPricing = getPricing('longcat', 'LongCat-2.0')
+assert.ok(longCatPricing)
+assert.equal(getPricing('longcat-api', 'longcat-2-0'), longCatPricing)
+assert.equal(longCatPricing.inputUsdPerMillion, 0.3)
+assert.equal(longCatPricing.outputUsdPerMillion, 1.2)
+assert.equal(longCatPricing.cacheReadUsdPerMillion, 0.006)
+assert.equal(
+    calculateEstimatedUsd({ input: 1_000_000, output: 1_000_000 }, longCatPricing),
+    1.5
+)
+assert.equal(
+    calculateEstimatedUsd({ cached_input: 1_000_000, input: 1_000_000, output: 0 }, longCatPricing),
+    0.006
+)
+
+const nemotronPricing = getPricing('nvidia', 'nvidia/nemotron-3-super-120b-a12b')
+assert.ok(nemotronPricing)
+assert.equal(getPricing('nvidia-api', 'nvidia-nemotron-3-super-120b-a12b'), nemotronPricing)
+assert.equal(nemotronPricing.inputUsdPerMillion, 0.193)
+assert.equal(nemotronPricing.outputUsdPerMillion, 0.65)
+assert.equal(nemotronPricing.cacheReadUsdPerMillion, null)
+assert.equal(
+    calculateEstimatedUsd({ input: 1_000_000, output: 1_000_000 }, nemotronPricing),
+    0.843
+)
+
 for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, '']) {
     assert.equal(normalizeRate(invalid), null)
 }
@@ -125,6 +151,22 @@ const included = calculateCost({
     usage: { cost_usd: 0 }
 })
 assert.equal(included.status, 'included')
+
+const freeModelEstimate = calculateCost({
+    model: 'LongCat-2.0',
+    provider: 'longcat',
+    usage: { cost_usd: 0, input: 1_000_000, output: 1_000_000 }
+})
+assert.equal(freeModelEstimate.amountUsd, 1.5)
+assert.equal(freeModelEstimate.status, 'estimated')
+
+const nemotronFreeModelEstimate = calculateCost({
+    model: 'nvidia-nemotron-3-super-120b-a12b',
+    provider: 'nvidia-api',
+    usage: { cost_usd: 0, input: 1_000_000, output: 1_000_000 }
+})
+assert.equal(nemotronFreeModelEstimate.amountUsd, 0.843)
+assert.equal(nemotronFreeModelEstimate.status, 'estimated')
 
 const unknownModel = calculateCost({
     model: 'unregistered-model',
@@ -182,4 +224,4 @@ assert.equal(/\b(fetch|XMLHttpRequest)\s*\(/.test(pluginSource), false)
 assert.equal(pluginSource.includes('host.request('), false)
 assert.equal(pluginSource.includes("from './cost.mjs'"), false)
 
-console.log('llm-cost-jpy calculation tests passed')
+console.log('hermes-llm-cost-jpy calculation tests passed')
