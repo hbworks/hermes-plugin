@@ -4,9 +4,14 @@ import { readFile } from 'node:fs/promises'
 import {
     calculateCost,
     calculateEstimatedUsd,
+    createCostHistoryRecord,
     formatJpy,
+    getCostHistoryEntries,
     getPricing,
-    normalizeRate
+    historyResultForSession,
+    normalizeRate,
+    resolveModelForUsage,
+    upsertCostHistory
 } from './cost.mjs'
 
 const pricing = getPricing('openai-api', 'gpt-5.6-luna')
@@ -126,6 +131,43 @@ for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, '']) {
 }
 assert.equal(normalizeRate('150.25'), 150.25)
 assert.equal(formatJpy(198.4), '¥198')
+assert.equal(
+    resolveModelForUsage({
+        currentModel: 'main-model',
+        focusedTile: true,
+        usage: { model: 'historical-model' }
+    }),
+    'historical-model'
+)
+assert.equal(
+    resolveModelForUsage({ currentModel: 'main-model', focusedTile: true, usage: {} }),
+    ''
+)
+assert.equal(
+    resolveModelForUsage({ currentModel: 'main-model', focusedTile: false, usage: {} }),
+    'main-model'
+)
+
+const historyResult = {
+    amountUsd: 1.23,
+    model: 'historical-model',
+    pricing,
+    provider: 'openai-api',
+    status: 'estimated'
+}
+const historyRecord = createCostHistoryRecord('history-session', historyResult, 100)
+assert.equal(historyRecord.sessionId, 'history-session')
+assert.equal(historyRecord.amountUsd, 1.23)
+const history = upsertCostHistory({}, 'history-session', historyResult, 100)
+assert.equal(historyResultForSession(history, 'history-session').amountUsd, 1.23)
+const updatedHistory = upsertCostHistory(history, 'history-session', { ...historyResult, amountUsd: 2.34 }, 200)
+assert.equal(historyResultForSession(updatedHistory, 'history-session').amountUsd, 2.34)
+assert.equal(historyResultForSession(updatedHistory, 'missing-session'), null)
+const newestHistory = upsertCostHistory(updatedHistory, 'newer-session', historyResult, 300)
+assert.deepEqual(
+    getCostHistoryEntries(newestHistory).map(record => record.sessionId),
+    ['newer-session', 'history-session']
+)
 
 const estimated = calculateCost({
     model: 'gpt-5.6-luna',
@@ -159,6 +201,18 @@ const freeModelEstimate = calculateCost({
 })
 assert.equal(freeModelEstimate.amountUsd, 1.5)
 assert.equal(freeModelEstimate.status, 'estimated')
+
+const historicalUsageModel = resolveModelForUsage({
+    currentModel: 'main-model',
+    focusedTile: true,
+    usage: { model: 'LongCat-2.0' }
+})
+const historicalFreeModelEstimate = calculateCost({
+    model: historicalUsageModel,
+    usage: { cost_usd: 0, input: 1_000_000, output: 1_000_000 }
+})
+assert.equal(historicalFreeModelEstimate.amountUsd, 1.5)
+assert.equal(historicalFreeModelEstimate.status, 'estimated')
 
 const nemotronFreeModelEstimate = calculateCost({
     model: 'nvidia-nemotron-3-super-120b-a12b',

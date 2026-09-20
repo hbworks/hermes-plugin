@@ -17,6 +17,8 @@ const PRICING_PROVIDER_ALIASES = Object.freeze({
     'nvidia-api': 'nvidia'
 })
 
+const MAX_COST_HISTORY_ENTRIES = 200
+
 function createTier(inputUsdPerMillion, outputUsdPerMillion, cacheReadUsdPerMillion = null, cacheWriteUsdPerMillion = null) {
     return {
         cacheReadUsdPerMillion,
@@ -471,6 +473,98 @@ export function normalizeRate(value) {
 
 function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : ''
+}
+
+export function resolveModelForUsage({ currentModel = '', focusedTile = false, usage = null } = {}) {
+    const usageModel = normalizeText(usage?.model)
+    return usageModel || (focusedTile ? '' : normalizeText(currentModel))
+}
+
+function serializeHistoryPricing(pricing) {
+    if (!pricing || typeof pricing !== 'object') {
+        return null
+    }
+
+    return {
+        checkedAt: normalizeText(pricing.checkedAt),
+        model: normalizeText(pricing.model),
+        provider: normalizeText(pricing.provider),
+        sourceUrl: normalizeText(pricing.sourceUrl)
+    }
+}
+
+export function createCostHistoryRecord(sessionId, result, updatedAt = Date.now()) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const amountUsd = finiteNonNegative(result?.amountUsd)
+    if (!normalizedSessionId || amountUsd === null) {
+        return null
+    }
+
+    return {
+        amountUsd,
+        model: normalizeText(result?.model),
+        pricing: serializeHistoryPricing(result?.pricing),
+        provider: normalizeText(result?.provider),
+        sessionId: normalizedSessionId,
+        status: normalizeText(result?.status) || 'unknown',
+        updatedAt: finiteNonNegative(updatedAt) ?? Date.now()
+    }
+}
+
+export function normalizeCostHistory(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {}
+    }
+
+    const records = Object.entries(value)
+        .map(([sessionId, record]) => {
+            const normalized = createCostHistoryRecord(sessionId, record, record?.updatedAt)
+            return normalized ? [sessionId, normalized] : null
+        })
+        .filter(record => record !== null)
+        .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
+        .slice(0, MAX_COST_HISTORY_ENTRIES)
+
+    return Object.fromEntries(records)
+}
+
+export function upsertCostHistory(history, sessionId, result, updatedAt = Date.now()) {
+    const normalizedHistory = normalizeCostHistory(history)
+    const record = createCostHistoryRecord(sessionId, result, updatedAt)
+    if (!record) {
+        return normalizedHistory
+    }
+
+    const existing = normalizedHistory[record.sessionId]
+    if (existing && JSON.stringify({ ...existing, updatedAt: 0 }) === JSON.stringify({ ...record, updatedAt: 0 })) {
+        return normalizedHistory
+    }
+
+    return normalizeCostHistory({
+        ...normalizedHistory,
+        [record.sessionId]: record
+    })
+}
+
+export function getCostHistoryEntries(history) {
+    return Object.values(normalizeCostHistory(history))
+}
+
+export function historyResultForSession(history, sessionId) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const record = normalizeCostHistory(history)[normalizedSessionId]
+    if (!record) {
+        return null
+    }
+
+    return {
+        amountUsd: record.amountUsd,
+        model: record.model,
+        pricing: record.pricing,
+        provider: record.provider,
+        sessionId: normalizedSessionId,
+        status: record.status
+    }
 }
 
 function normalizePricingModel(value) {

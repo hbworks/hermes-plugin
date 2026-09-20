@@ -33,6 +33,8 @@ const PRICING_PROVIDER_ALIASES = Object.freeze({
     'nvidia-api': 'nvidia'
 })
 
+const MAX_COST_HISTORY_ENTRIES = 200
+
 function createTier(inputUsdPerMillion, outputUsdPerMillion, cacheReadUsdPerMillion = null, cacheWriteUsdPerMillion = null) {
     return {
         cacheReadUsdPerMillion,
@@ -685,6 +687,7 @@ function formatUsd(amount) {
 
 const ID = 'hermes-llm-cost-jpy'
 const STORAGE_KEY = 'usd_jpy_rate'
+const COST_HISTORY_STORAGE_KEY = 'session_cost_history'
 const EMPTY_USAGE = atom(null)
 const EMPTY_STRING = atom('')
 const EMPTY_OWNER = atom(null)
@@ -699,13 +702,31 @@ const runtimeSessionIdAtom = host.state?.focusedSessionId || EMPTY_STRING
 
 function createController(storage) {
     const initialRate = normalizeRate(storage.get(STORAGE_KEY, null))
+    const initialHistory = normalizeCostHistory(storage.get(COST_HISTORY_STORAGE_KEY, {}))
     const rate = atom(initialRate)
+    const history = atom(initialHistory)
 
     return {
+        history,
         rate,
+        clearHistory() {
+            storage.remove(COST_HISTORY_STORAGE_KEY)
+            history.set({})
+        },
         clearRate() {
             storage.remove(STORAGE_KEY)
             rate.set(null)
+        },
+        recordCost(sessionId, result) {
+            const current = history.get()
+            const next = upsertCostHistory(current, sessionId, result)
+            if (JSON.stringify(current) === JSON.stringify(next)) {
+                return false
+            }
+
+            storage.set(COST_HISTORY_STORAGE_KEY, next)
+            history.set(next)
+            return true
         },
         setRate(value) {
             const normalized = normalizeRate(value)
@@ -734,6 +755,98 @@ function normalizeProvider(value) {
 
 function normalizeModel(value) {
     return typeof value === 'string' ? value.trim() : ''
+}
+
+function resolveModelForUsage({ currentModel = '', focusedTile = false, usage = null } = {}) {
+    const usageModel = normalizeModel(usage?.model)
+    return usageModel || (focusedTile ? '' : normalizeModel(currentModel))
+}
+
+function serializeHistoryPricing(pricing) {
+    if (!pricing || typeof pricing !== 'object') {
+        return null
+    }
+
+    return {
+        checkedAt: normalizeText(pricing.checkedAt),
+        model: normalizeText(pricing.model),
+        provider: normalizeText(pricing.provider),
+        sourceUrl: normalizeText(pricing.sourceUrl)
+    }
+}
+
+function createCostHistoryRecord(sessionId, result, updatedAt = Date.now()) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const amountUsd = finiteNonNegative(result?.amountUsd)
+    if (!normalizedSessionId || amountUsd === null) {
+        return null
+    }
+
+    return {
+        amountUsd,
+        model: normalizeText(result?.model),
+        pricing: serializeHistoryPricing(result?.pricing),
+        provider: normalizeText(result?.provider),
+        sessionId: normalizedSessionId,
+        status: normalizeText(result?.status) || 'unknown',
+        updatedAt: finiteNonNegative(updatedAt) ?? Date.now()
+    }
+}
+
+function normalizeCostHistory(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {}
+    }
+
+    const records = Object.entries(value)
+        .map(([sessionId, record]) => {
+            const normalized = createCostHistoryRecord(sessionId, record, record?.updatedAt)
+            return normalized ? [sessionId, normalized] : null
+        })
+        .filter(record => record !== null)
+        .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
+        .slice(0, MAX_COST_HISTORY_ENTRIES)
+
+    return Object.fromEntries(records)
+}
+
+function upsertCostHistory(history, sessionId, result, updatedAt = Date.now()) {
+    const normalizedHistory = normalizeCostHistory(history)
+    const record = createCostHistoryRecord(sessionId, result, updatedAt)
+    if (!record) {
+        return normalizedHistory
+    }
+
+    const existing = normalizedHistory[record.sessionId]
+    if (existing && JSON.stringify({ ...existing, updatedAt: 0 }) === JSON.stringify({ ...record, updatedAt: 0 })) {
+        return normalizedHistory
+    }
+
+    return normalizeCostHistory({
+        ...normalizedHistory,
+        [record.sessionId]: record
+    })
+}
+
+function getCostHistoryEntries(history) {
+    return Object.values(normalizeCostHistory(history))
+}
+
+function historyResultForSession(history, sessionId) {
+    const normalizedSessionId = normalizeText(sessionId)
+    const record = normalizeCostHistory(history)[normalizedSessionId]
+    if (!record) {
+        return null
+    }
+
+    return {
+        amountUsd: record.amountUsd,
+        model: record.model,
+        pricing: record.pricing,
+        provider: record.provider,
+        sessionId: normalizedSessionId,
+        status: record.status
+    }
 }
 
 function normalizeSessionId(value) {
@@ -765,6 +878,36 @@ function getStatusbarLabel(t, result, rate) {
     return result.status === 'estimated' ? `${amount} ${t('statusbar.estimated')}` : amount
 }
 
+function formatHistoryTimestamp(value) {
+    const timestamp = finiteNonNegative(value)
+    if (timestamp === null) {
+        return ''
+    }
+
+    return new Date(timestamp).toLocaleString('ja-JP')
+}
+
+function HistoryRow({ rate, record }) {
+    const jpy = rate === null ? '' : ` / ${formatJpy(record.amountUsd * rate)}`
+    return jsxs('div', {
+        className: 'border-b border-(--ui-stroke-secondary) py-1.5 last:border-b-0',
+        children: [
+            jsxs('div', {
+                className: 'flex items-baseline justify-between gap-2',
+                children: [
+                    jsx('span', { className: 'min-w-0 truncate text-(--ui-text-primary)', children: record.model || record.sessionId }),
+                    jsx('span', { className: 'shrink-0 text-right text-(--ui-text-primary)', children: `${formatUsd(record.amountUsd)}${jpy}` })
+                ]
+            }),
+            jsx('div', {
+                className: 'truncate text-[0.6875rem] text-(--ui-text-tertiary)',
+                title: record.sessionId,
+                children: `${record.sessionId} · ${formatHistoryTimestamp(record.updatedAt)}`
+            })
+        ]
+    })
+}
+
 function CostStatusbar({ controller }) {
     const t = usePluginI18n(ID)
     const usage = useValue(usageAtom)
@@ -775,16 +918,34 @@ function CostStatusbar({ controller }) {
     const storedSessionId = normalizeSessionId(useValue(storedSessionIdAtom))
     const runtimeSessionId = normalizeSessionId(useValue(runtimeSessionIdAtom))
     const sessionId = storedSessionId || runtimeSessionId
+    const historySessionId = sessionId
     const focusedTile = Boolean(runtimeSessionId && runtimeSessionId !== activeSessionId)
-    const model = focusedTile ? '' : currentModel
+    const model = resolveModelForUsage({ currentModel, focusedTile, usage })
+    const usageModel = normalizeModel(usage?.model)
     const rate = useValue(controller.rate)
-    const result = calculateCost({ model, provider, sessionId, usage })
+    const history = useValue(controller.history)
+    const calculatedResult = calculateCost({ model, provider, sessionId, usage })
+    const historicalResult = historyResultForSession(history, historySessionId)
+    const useHistoricalResult = Boolean(
+        historicalResult &&
+        ((!usageModel && calculatedResult.status !== 'provider-reported') ||
+            !model || calculatedResult.status === 'unknown' ||
+            (calculatedResult.status === 'included' && !calculatedResult.pricing))
+    )
+    const result = useHistoricalResult ? historicalResult : calculatedResult
+    const historyEntries = getCostHistoryEntries(history)
     const [draftRate, setDraftRate] = useState(() => rate === null ? '' : String(rate))
     const [error, setError] = useState('')
 
     useEffect(() => {
         setDraftRate(rate === null ? '' : String(rate))
     }, [rate])
+
+    useEffect(() => {
+        if (historySessionId && calculatedResult.amountUsd !== null) {
+            controller.recordCost(historySessionId, calculatedResult)
+        }
+    }, [calculatedResult.amountUsd, calculatedResult.model, calculatedResult.pricing?.checkedAt, calculatedResult.pricing?.sourceUrl, calculatedResult.provider, calculatedResult.status, controller, historySessionId])
 
     const saveRate = () => {
         if (!controller.setRate(draftRate)) {
@@ -798,6 +959,11 @@ function CostStatusbar({ controller }) {
     const clearRate = () => {
         controller.clearRate()
         setDraftRate('')
+        setError('')
+    }
+
+    const clearCostHistory = () => {
+        controller.clearHistory()
         setError('')
     }
 
@@ -843,12 +1009,25 @@ function CostStatusbar({ controller }) {
                             jsx(DetailRow, { label: t('detail.jpy'), value: jpyValue }),
                             jsx(DetailRow, { label: t('detail.rate'), value: rate === null ? t('detail.unset') : `${formatJpy(rate)} / $1` }),
                             jsx(DetailRow, { label: t('detail.provider'), value: providerLabel }),
-                            jsx(DetailRow, { label: t('detail.model'), value: model || t('detail.unavailable') }),
+                            jsx(DetailRow, { label: t('detail.model'), value: result.model || t('detail.unavailable') }),
                             jsx(DetailRow, { label: t('detail.profile'), value: ownerLabel }),
                             jsx(DetailRow, { label: t('detail.session'), value: sessionId || t('detail.unavailable') }),
                             jsx(DetailRow, { label: t('detail.status'), value: statusLabel }),
                             jsx(DetailRow, { label: t('detail.checkedAt'), value: result.pricing?.checkedAt || t('detail.unavailable') }),
                             sourceUrl && jsx('a', { className: 'mt-1 break-all text-(--ui-accent)', href: sourceUrl, rel: 'noreferrer', target: '_blank', children: sourceUrl })
+                        ]
+                    }),
+                    jsx(DropdownMenuSeparator, { className: 'my-3' }),
+                    jsxs('div', {
+                        className: 'flex flex-col gap-2',
+                        children: [
+                            jsx('div', { className: 'text-xs font-medium text-(--ui-text-primary)', children: t('history.title') }),
+                            historyEntries.length === 0
+                                ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('history.empty') })
+                                : jsx('div', {
+                                    className: 'max-h-48 overflow-y-auto pr-1',
+                                    children: historyEntries.map(record => jsx(HistoryRow, { key: record.sessionId, rate, record }))
+                                })
                         ]
                     }),
                     jsx(DropdownMenuSeparator, { className: 'my-3' }),
@@ -875,7 +1054,8 @@ function CostStatusbar({ controller }) {
                                 className: 'flex items-center gap-2',
                                 children: [
                                     jsx(Button, { onClick: saveRate, size: 'sm', type: 'button', children: t('settings.save') }),
-                                    jsx(Button, { disabled: rate === null, onClick: clearRate, size: 'sm', type: 'button', variant: 'ghost', children: t('settings.clear') })
+                                    jsx(Button, { disabled: rate === null, onClick: clearRate, size: 'sm', type: 'button', variant: 'ghost', children: t('settings.clear') }),
+                                    jsx(Button, { disabled: Object.keys(history).length === 0, onClick: clearCostHistory, size: 'sm', type: 'button', variant: 'ghost', children: t('settings.clearHistory') })
                                 ]
                             }),
                             jsx('div', { className: 'text-[0.6875rem] leading-relaxed text-(--ui-text-tertiary)', children: t('settings.note') })
@@ -909,10 +1089,15 @@ export default {
                     unset: 'Not set',
                     usd: 'USD'
                 },
+                history: {
+                    empty: 'No saved session costs yet.',
+                    title: 'Cost history'
+                },
                 settings: {
                     clear: 'Clear',
+                    clearHistory: 'Clear history',
                     invalidRate: 'Enter a positive finite USD/JPY rate.',
-                    note: 'This is a fixed display conversion. No exchange-rate or pricing API is contacted.',
+                    note: 'This is a fixed display conversion. No exchange-rate or pricing API is contacted. Session cost snapshots are stored locally in this plugin.',
                     placeholder: 'e.g. 150.00',
                     rateLabel: 'JPY per USD',
                     save: 'Save',
@@ -948,10 +1133,15 @@ export default {
                     unset: '未設定',
                     usd: '米ドル'
                 },
+                history: {
+                    empty: '保存済みのセッションコストはありません。',
+                    title: 'コスト履歴'
+                },
                 settings: {
                     clear: 'クリア',
+                    clearHistory: '履歴をクリア',
                     invalidRate: '正の有限なUSD/JPYレートを入力してください。',
-                    note: '固定の表示換算です。為替APIや料金APIには接続しません。',
+                    note: '固定の表示換算です。為替APIや料金APIには接続しません。セッションのコストスナップショットはこのプラグインにローカル保存します。',
                     placeholder: '例: 150.00',
                     rateLabel: '1ドルあたりの円',
                     save: '保存',
