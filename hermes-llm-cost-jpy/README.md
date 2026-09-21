@@ -121,7 +121,7 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 - `cost_usd`がない場合、公開されているprovider/modelの固定料金表と`input`、`output`から推定します。
 - 現行SDKでproviderが取得できない場合、または取得したproviderに料金表上の一致がない場合は、モデル名が固定料金表上で一意に対応するときだけ公式API料金のproviderを補完します。`openai/gpt-5.6-luna`のようなprovider接頭辞付きモデル名は接頭辞を除いて照合します。複数providerに同名モデルがある場合や、モデルが料金表にない場合は`Cost n/a`にします。`focusedSessionProfile`をproviderとして推測しません。
 - 公開されている`host.state.model`はmain modelです。フォーカス中セッションの`focusedUsage.model`が提供される場合はそれを優先し、提供されないタイルではmodelを推測せず、固定料金によるフォールバックを停止します。
-- キャッシュ内訳が明示された入力を純粋関数へ渡した場合だけ、通常入力・キャッシュ読み取り・キャッシュ書き込みを別単価で計算します。Anthropicの`cache_read_input_tokens`と`cache_creation_input_tokens`も読み取ります。現行のHermes使用量では入力全体を通常入力として推定します。
+- `focusedUsage.input`はキャッシュされていない入力、`focusedUsage.total`はキャッシュ読み取り・書き込みと出力を含む累計です。キャッシュ内訳が明示された入力を優先し、内訳がない現行SDKでは`total - input - output`を追加入力として復元します。`cache_hit_pct`があれば読み取りと書き込みへ分け、割合がない場合は追加分をcache writeとして扱います。Anthropicの`cache_read_input_tokens`と`cache_creation_input_tokens`も読み取ります。
 - `total`やreasoning tokensは入力・出力へ重複加算しません。
 - 固定料金表にないprovider/modelは`Cost n/a`であり、`¥0`にはしません。
 - セッションIDは`focusedStoredSessionId`を優先し、永続IDがまだ確定していない場合だけruntime IDを一時キーとして使います。usageにセッションIDが含まれる場合は表示中IDと一致するときだけ保存します。有効なコストをUSDスナップショットとしてプラグインの`ctx.storage`へ最大200件保存し、履歴には最新10件を表示します。履歴表示時のJPYは現在の換算レートから再計算し、設定欄のクリア操作で削除できます。

@@ -4,12 +4,15 @@ import { readFile } from 'node:fs/promises'
 import {
     calculateCost,
     calculateEstimatedUsd,
+    calculateTokenCostUsd,
     canPersistCostHistory,
     createCostHistoryRecord,
+    extractUsageTokens,
     formatJpy,
     getCostHistoryEntries,
     getPricing,
     historyResultForSession,
+    isTokenCountValid,
     normalizeRate,
     resolveModelForUsage,
     upsertCostHistory
@@ -21,6 +24,50 @@ assert.ok(pricing)
 assert.equal(
     calculateEstimatedUsd({ input: 1_000_000, output: 0 }, pricing),
     0.2
+)
+assert.deepEqual(
+    extractUsageTokens({
+        cache_hit_pct: 50,
+        input: 100_000,
+        output: 10_000,
+        total: 1_110_000
+    }),
+    { cachedInput: 550_000, cacheWriteInput: 450_000, input: 1_100_000, output: 10_000 }
+)
+assert.equal(
+    calculateEstimatedUsd({
+        cache_hit_pct: 50,
+        input: 100_000,
+        output: 10_000,
+        total: 1_110_000
+    }, pricing),
+    0.1555
+)
+assert.deepEqual(
+    extractUsageTokens({
+        input: 100_000,
+        output: 10_000,
+        total: 1_110_000
+    }),
+    { cachedInput: 0, cacheWriteInput: 1_000_000, input: 1_100_000, output: 10_000 }
+)
+assert.equal(
+    calculateEstimatedUsd({
+        input: 100_000,
+        output: 10_000,
+        total: 1_110_000
+    }, pricing),
+    0.282
+)
+assert.deepEqual(
+    extractUsageTokens({
+        cache_read_tokens: 550_000,
+        cache_write_tokens: 450_000,
+        input: 100_000,
+        output: 10_000,
+        total: 1_110_000
+    }),
+    { cachedInput: 550_000, cacheWriteInput: 450_000, input: 1_100_000, output: 10_000 }
 )
 assert.equal(
     calculateEstimatedUsd({ input: 0, output: 1_000_000 }, pricing),
@@ -277,9 +324,48 @@ assert.equal(sessionB.sessionId, 'session-b')
 assert.notEqual(sessionB.sessionId, estimated.sessionId)
 assert.equal(sessionB.amountUsd, 1.2)
 
+// Helper & edge case tests for refactored token validation and calculation
+assert.equal(extractUsageTokens(null), null)
+assert.equal(extractUsageTokens({}), null)
+assert.equal(extractUsageTokens({ input: 100 }), null)
+assert.equal(extractUsageTokens({ input: -5, output: 10 }), null)
+assert.deepEqual(
+    extractUsageTokens({
+        input: 1000,
+        input_tokens_details: { cached_tokens: 200, cache_write_tokens: 100 },
+        output: 500
+    }),
+    { cachedInput: 200, cacheWriteInput: 100, input: 1000, output: 500 }
+)
+
+assert.equal(isTokenCountValid(null), false)
+assert.equal(isTokenCountValid({ cachedInput: 600, cacheWriteInput: 500, input: 1000 }), false)
+assert.equal(isTokenCountValid({ cachedInput: 500, cacheWriteInput: 500, input: 1000 }), true)
+assert.equal(isTokenCountValid({ cachedInput: 100, cacheWriteInput: 200, input: 1000 }), true)
+
+assert.equal(calculateTokenCostUsd(null, null), null)
+assert.equal(
+    calculateTokenCostUsd(
+        { cachedInput: 100, cacheWriteInput: 0, input: 1000, output: 500 },
+        { cacheReadUsdPerMillion: null, inputUsdPerMillion: 1, outputUsdPerMillion: 2 }
+    ),
+    null
+)
+assert.equal(
+    calculateEstimatedUsd(
+        { cached_input: 800_000, cache_write_input: 300_000, input: 1_000_000, output: 100 },
+        pricing
+    ),
+    null
+)
+assert.equal(calculateEstimatedUsd(null, pricing), null)
+assert.equal(calculateEstimatedUsd({ input: 100, output: 100 }, null), null)
+
 const pluginSource = await readFile(new URL('./plugin.js', import.meta.url), 'utf8')
 assert.equal(/\b(fetch|XMLHttpRequest)\s*\(/.test(pluginSource), false)
 assert.equal(pluginSource.includes('host.request('), false)
 assert.equal(pluginSource.includes("from './cost.mjs'"), false)
+assert.ok(pluginSource.includes('const LOCALES = Object.freeze('))
+assert.ok(pluginSource.includes("unknown: '取得不可'"))
 
 console.log('hermes-llm-cost-jpy calculation tests passed')

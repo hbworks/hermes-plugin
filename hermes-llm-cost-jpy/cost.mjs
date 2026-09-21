@@ -1,11 +1,33 @@
+/**
+ * Hermes LLM Cost - Core Pricing and Cost Calculation Logic
+ *
+ * Source of truth for model pricing tables, token cost estimation,
+ * exchange rate normalization, and session cost history.
+ */
+
+/** Million divisor for per-million token pricing */
 const MILLION = 1_000_000
+
+/** Decimal places used when formatting JPY currency */
 const JPY_DECIMAL_PLACES = 2
 
+/** Context length threshold in tokens for OpenAI long-context pricing tiers */
+const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
+
+/** Context length threshold in tokens for Gemini long-context pricing tiers */
+const GEMINI_LONG_CONTEXT_THRESHOLD = 200_000
+
+/** Maximum number of session cost records retained in local storage */
+const MAX_COST_HISTORY_ENTRIES = 200
+
+/** Official pricing documentation source URLs */
 const OPENAI_PRICING_URL = 'https://developers.openai.com/api/docs/pricing'
 const GEMINI_PRICING_URL = 'https://ai.google.dev/gemini-api/docs/pricing'
 const ANTHROPIC_PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing'
 const LONGCAT_PRICING_URL = 'https://artificialanalysis.ai/ja/models/longcat-2-0'
 const NEMOTRON_PRICING_URL = 'https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b'
+
+/** Date when pricing tables were last verified against provider documentation */
 const CHECKED_AT = '2026-09-18'
 
 const PRICING_MODEL_ALIASES = Object.freeze({
@@ -17,8 +39,6 @@ const PRICING_PROVIDER_ALIASES = Object.freeze({
     'longcat-api': 'longcat',
     'nvidia-api': 'nvidia'
 })
-
-const MAX_COST_HISTORY_ENTRIES = 200
 
 function createTier(inputUsdPerMillion, outputUsdPerMillion, cacheReadUsdPerMillion = null, cacheWriteUsdPerMillion = null) {
     return {
@@ -59,343 +79,313 @@ function createPricing({
     return Object.freeze(pricing)
 }
 
+function createOpenAiPricing({
+    model,
+    input,
+    output,
+    cacheRead = null,
+    cacheWrite = null,
+    longTier = null
+}) {
+    return createPricing({
+        provider: 'openai-api',
+        model,
+        sourceUrl: OPENAI_PRICING_URL,
+        inputUsdPerMillion: input,
+        outputUsdPerMillion: output,
+        cacheReadUsdPerMillion: cacheRead,
+        cacheWriteUsdPerMillion: cacheWrite,
+        longContextThreshold: longTier ? OPENAI_LONG_CONTEXT_THRESHOLD : null,
+        longContext: longTier
+    })
+}
+
+function createGeminiPricing({
+    model,
+    input,
+    output,
+    cacheRead = null,
+    cacheWrite = null,
+    longTier = null
+}) {
+    return createPricing({
+        provider: 'gemini',
+        model,
+        sourceUrl: GEMINI_PRICING_URL,
+        inputUsdPerMillion: input,
+        outputUsdPerMillion: output,
+        cacheReadUsdPerMillion: cacheRead,
+        cacheWriteUsdPerMillion: cacheWrite,
+        longContextThreshold: longTier ? GEMINI_LONG_CONTEXT_THRESHOLD : null,
+        longContext: longTier
+    })
+}
+
+function createAnthropicPricing({
+    model,
+    input,
+    output,
+    cacheRead = null,
+    cacheWrite = null
+}) {
+    return createPricing({
+        provider: 'anthropic',
+        model,
+        sourceUrl: ANTHROPIC_PRICING_URL,
+        inputUsdPerMillion: input,
+        outputUsdPerMillion: output,
+        cacheReadUsdPerMillion: cacheRead,
+        cacheWriteUsdPerMillion: cacheWrite
+    })
+}
+
 export const PRICING = Object.freeze({
-    'openai-api/gpt-6-astra': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-6-astra': createOpenAiPricing({
         model: 'gpt-6-astra',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 10,
-        outputUsdPerMillion: 50,
-        cacheReadUsdPerMillion: 1,
-        cacheWriteUsdPerMillion: 12.5,
-        longContextThreshold: 272_000,
-        longContext: createTier(20, 75, 2, 25)
+        input: 10,
+        output: 50,
+        cacheRead: 1,
+        cacheWrite: 12.5,
+        longTier: createTier(20, 75, 2, 25)
     }),
-    'openai-api/gpt-5.6-sol': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.6-sol': createOpenAiPricing({
         model: 'gpt-5.6-sol',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 4,
-        outputUsdPerMillion: 20,
-        cacheReadUsdPerMillion: 0.4,
-        cacheWriteUsdPerMillion: 5,
-        longContextThreshold: 272_000,
-        longContext: createTier(8, 30, 0.8, 10)
+        input: 4,
+        output: 20,
+        cacheRead: 0.4,
+        cacheWrite: 5,
+        longTier: createTier(8, 30, 0.8, 10)
     }),
-    'openai-api/gpt-5.6-terra': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.6-terra': createOpenAiPricing({
         model: 'gpt-5.6-terra',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 2,
-        outputUsdPerMillion: 12,
-        cacheReadUsdPerMillion: 0.2,
-        cacheWriteUsdPerMillion: 2.5,
-        longContextThreshold: 272_000,
-        longContext: createTier(4, 18, 0.4, 5)
+        input: 2,
+        output: 12,
+        cacheRead: 0.2,
+        cacheWrite: 2.5,
+        longTier: createTier(4, 18, 0.4, 5)
     }),
-    'openai-api/gpt-5.6-luna': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.6-luna': createOpenAiPricing({
         model: 'gpt-5.6-luna',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.2,
-        outputUsdPerMillion: 1.2,
-        cacheReadUsdPerMillion: 0.02,
-        cacheWriteUsdPerMillion: 0.25,
-        longContextThreshold: 272_000,
-        longContext: createTier(0.4, 1.8, 0.04, 0.5)
+        input: 0.2,
+        output: 1.2,
+        cacheRead: 0.02,
+        cacheWrite: 0.25,
+        longTier: createTier(0.4, 1.8, 0.04, 0.5)
     }),
-    'openai-api/gpt-5.5': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.5': createOpenAiPricing({
         model: 'gpt-5.5',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 5,
-        outputUsdPerMillion: 30,
-        cacheReadUsdPerMillion: 0.5,
-        longContextThreshold: 272_000,
-        longContext: createTier(10, 45, 1)
+        input: 5,
+        output: 30,
+        cacheRead: 0.5,
+        longTier: createTier(10, 45, 1)
     }),
-    'openai-api/gpt-5.5-pro': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.5-pro': createOpenAiPricing({
         model: 'gpt-5.5-pro',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 30,
-        outputUsdPerMillion: 180,
-        longContextThreshold: 272_000,
-        longContext: createTier(60, 270)
+        input: 30,
+        output: 180,
+        longTier: createTier(60, 270)
     }),
-    'openai-api/gpt-5.4': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.4': createOpenAiPricing({
         model: 'gpt-5.4',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 2.5,
-        outputUsdPerMillion: 15,
-        cacheReadUsdPerMillion: 0.25,
-        longContextThreshold: 272_000,
-        longContext: createTier(5, 22.5, 0.5)
+        input: 2.5,
+        output: 15,
+        cacheRead: 0.25,
+        longTier: createTier(5, 22.5, 0.5)
     }),
-    'openai-api/gpt-5.4-mini': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.4-mini': createOpenAiPricing({
         model: 'gpt-5.4-mini',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.75,
-        outputUsdPerMillion: 4.5,
-        cacheReadUsdPerMillion: 0.075
+        input: 0.75,
+        output: 4.5,
+        cacheRead: 0.075
     }),
-    'openai-api/gpt-5.4-nano': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.4-nano': createOpenAiPricing({
         model: 'gpt-5.4-nano',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.2,
-        outputUsdPerMillion: 1.25,
-        cacheReadUsdPerMillion: 0.02
+        input: 0.2,
+        output: 1.25,
+        cacheRead: 0.02
     }),
-    'openai-api/gpt-5.4-pro': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.4-pro': createOpenAiPricing({
         model: 'gpt-5.4-pro',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 30,
-        outputUsdPerMillion: 180,
-        longContextThreshold: 272_000,
-        longContext: createTier(60, 270)
+        input: 30,
+        output: 180,
+        longTier: createTier(60, 270)
     }),
-    'openai-api/gpt-5.2': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.2': createOpenAiPricing({
         model: 'gpt-5.2',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 1.75,
-        outputUsdPerMillion: 14,
-        cacheReadUsdPerMillion: 0.175
+        input: 1.75,
+        output: 14,
+        cacheRead: 0.175
     }),
-    'openai-api/gpt-5.2-pro': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.2-pro': createOpenAiPricing({
         model: 'gpt-5.2-pro',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 21,
-        outputUsdPerMillion: 168
+        input: 21,
+        output: 168
     }),
-    'openai-api/gpt-5.1': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5.1': createOpenAiPricing({
         model: 'gpt-5.1',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 1.25,
-        outputUsdPerMillion: 10,
-        cacheReadUsdPerMillion: 0.125
+        input: 1.25,
+        output: 10,
+        cacheRead: 0.125
     }),
-    'openai-api/gpt-5': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5': createOpenAiPricing({
         model: 'gpt-5',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 1.25,
-        outputUsdPerMillion: 10,
-        cacheReadUsdPerMillion: 0.125
+        input: 1.25,
+        output: 10,
+        cacheRead: 0.125
     }),
-    'openai-api/gpt-5-mini': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5-mini': createOpenAiPricing({
         model: 'gpt-5-mini',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.25,
-        outputUsdPerMillion: 2,
-        cacheReadUsdPerMillion: 0.025
+        input: 0.25,
+        output: 2,
+        cacheRead: 0.025
     }),
-    'openai-api/gpt-5-nano': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5-nano': createOpenAiPricing({
         model: 'gpt-5-nano',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.05,
-        outputUsdPerMillion: 0.4,
-        cacheReadUsdPerMillion: 0.005
+        input: 0.05,
+        output: 0.4,
+        cacheRead: 0.005
     }),
-    'openai-api/gpt-5-pro': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-5-pro': createOpenAiPricing({
         model: 'gpt-5-pro',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 15,
-        outputUsdPerMillion: 120
+        input: 15,
+        output: 120
     }),
-    'openai-api/gpt-4.1': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-4.1': createOpenAiPricing({
         model: 'gpt-4.1',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 2,
-        outputUsdPerMillion: 8,
-        cacheReadUsdPerMillion: 0.5
+        input: 2,
+        output: 8,
+        cacheRead: 0.5
     }),
-    'openai-api/gpt-4.1-mini': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-4.1-mini': createOpenAiPricing({
         model: 'gpt-4.1-mini',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.4,
-        outputUsdPerMillion: 1.6,
-        cacheReadUsdPerMillion: 0.1
+        input: 0.4,
+        output: 1.6,
+        cacheRead: 0.1
     }),
-    'openai-api/gpt-4.1-nano': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-4.1-nano': createOpenAiPricing({
         model: 'gpt-4.1-nano',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.1,
-        outputUsdPerMillion: 0.4,
-        cacheReadUsdPerMillion: 0.025
+        input: 0.1,
+        output: 0.4,
+        cacheRead: 0.025
     }),
-    'openai-api/gpt-4o': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-4o': createOpenAiPricing({
         model: 'gpt-4o',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 2.5,
-        outputUsdPerMillion: 10,
-        cacheReadUsdPerMillion: 1.25
+        input: 2.5,
+        output: 10,
+        cacheRead: 1.25
     }),
-    'openai-api/gpt-4o-2024-05-13': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-4o-2024-05-13': createOpenAiPricing({
         model: 'gpt-4o-2024-05-13',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 5,
-        outputUsdPerMillion: 15
+        input: 5,
+        output: 15
     }),
-    'openai-api/gpt-4o-mini': createPricing({
-        provider: 'openai-api',
+    'openai-api/gpt-4o-mini': createOpenAiPricing({
         model: 'gpt-4o-mini',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 0.15,
-        outputUsdPerMillion: 0.6,
-        cacheReadUsdPerMillion: 0.075
+        input: 0.15,
+        output: 0.6,
+        cacheRead: 0.075
     }),
-    'openai-api/o1': createPricing({
-        provider: 'openai-api',
+    'openai-api/o1': createOpenAiPricing({
         model: 'o1',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 15,
-        outputUsdPerMillion: 60,
-        cacheReadUsdPerMillion: 7.5
+        input: 15,
+        output: 60,
+        cacheRead: 7.5
     }),
-    'openai-api/o1-pro': createPricing({
-        provider: 'openai-api',
+    'openai-api/o1-pro': createOpenAiPricing({
         model: 'o1-pro',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 150,
-        outputUsdPerMillion: 600
+        input: 150,
+        output: 600
     }),
-    'openai-api/o3-pro': createPricing({
-        provider: 'openai-api',
+    'openai-api/o3-pro': createOpenAiPricing({
         model: 'o3-pro',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 20,
-        outputUsdPerMillion: 80
+        input: 20,
+        output: 80
     }),
-    'openai-api/o3': createPricing({
-        provider: 'openai-api',
+    'openai-api/o3': createOpenAiPricing({
         model: 'o3',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 2,
-        outputUsdPerMillion: 8,
-        cacheReadUsdPerMillion: 0.5
+        input: 2,
+        output: 8,
+        cacheRead: 0.5
     }),
-    'openai-api/o4-mini': createPricing({
-        provider: 'openai-api',
+    'openai-api/o4-mini': createOpenAiPricing({
         model: 'o4-mini',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 1.1,
-        outputUsdPerMillion: 4.4,
-        cacheReadUsdPerMillion: 0.275
+        input: 1.1,
+        output: 4.4,
+        cacheRead: 0.275
     }),
-    'openai-api/o3-mini': createPricing({
-        provider: 'openai-api',
+    'openai-api/o3-mini': createOpenAiPricing({
         model: 'o3-mini',
-        sourceUrl: OPENAI_PRICING_URL,
-        inputUsdPerMillion: 1.1,
-        outputUsdPerMillion: 4.4,
-        cacheReadUsdPerMillion: 0.55
+        input: 1.1,
+        output: 4.4,
+        cacheRead: 0.55
     }),
-    'gemini/gemini-3.8-flash': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3.8-flash': createGeminiPricing({
         model: 'gemini-3.8-flash',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.75,
-        outputUsdPerMillion: 3.75,
-        cacheReadUsdPerMillion: 0.075
+        input: 0.75,
+        output: 3.75,
+        cacheRead: 0.075
     }),
-    'gemini/gemini-3.7-flash': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3.7-flash': createGeminiPricing({
         model: 'gemini-3.7-flash',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.75,
-        outputUsdPerMillion: 3.75,
-        cacheReadUsdPerMillion: 0.075
+        input: 0.75,
+        output: 3.75,
+        cacheRead: 0.075
     }),
-    'gemini/gemini-3.6-flash': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3.6-flash': createGeminiPricing({
         model: 'gemini-3.6-flash',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.75,
-        outputUsdPerMillion: 3.75,
-        cacheReadUsdPerMillion: 0.075
+        input: 0.75,
+        output: 3.75,
+        cacheRead: 0.075
     }),
-    'gemini/gemini-3.5-flash': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3.5-flash': createGeminiPricing({
         model: 'gemini-3.5-flash',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 1.5,
-        outputUsdPerMillion: 9,
-        cacheReadUsdPerMillion: 0.15
+        input: 1.5,
+        output: 9,
+        cacheRead: 0.15
     }),
-    'gemini/gemini-3.5-flash-lite': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3.5-flash-lite': createGeminiPricing({
         model: 'gemini-3.5-flash-lite',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.3,
-        outputUsdPerMillion: 2.5,
-        cacheReadUsdPerMillion: 0.03
+        input: 0.3,
+        output: 2.5,
+        cacheRead: 0.03
     }),
-    'gemini/gemini-3.1-flash-lite': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3.1-flash-lite': createGeminiPricing({
         model: 'gemini-3.1-flash-lite',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.25,
-        outputUsdPerMillion: 1.5,
-        cacheReadUsdPerMillion: 0.025
+        input: 0.25,
+        output: 1.5,
+        cacheRead: 0.025
     }),
-    'gemini/gemini-3-flash-preview': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3-flash-preview': createGeminiPricing({
         model: 'gemini-3-flash-preview',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.5,
-        outputUsdPerMillion: 3,
-        cacheReadUsdPerMillion: 0.05
+        input: 0.5,
+        output: 3,
+        cacheRead: 0.05
     }),
-    'gemini/gemini-3.1-pro-preview': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-3.1-pro-preview': createGeminiPricing({
         model: 'gemini-3.1-pro-preview',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 2,
-        outputUsdPerMillion: 12,
-        cacheReadUsdPerMillion: 0.2,
-        longContextThreshold: 200_000,
-        longContext: createTier(4, 18, 0.4)
+        input: 2,
+        output: 12,
+        cacheRead: 0.2,
+        longTier: createTier(4, 18, 0.4)
     }),
-    'gemini/gemini-2.5-pro': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-2.5-pro': createGeminiPricing({
         model: 'gemini-2.5-pro',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 1.25,
-        outputUsdPerMillion: 10,
-        cacheReadUsdPerMillion: 0.125,
-        longContextThreshold: 200_000,
-        longContext: createTier(2.5, 15, 0.25)
+        input: 1.25,
+        output: 10,
+        cacheRead: 0.125,
+        longTier: createTier(2.5, 15, 0.25)
     }),
-    'gemini/gemini-2.5-flash': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-2.5-flash': createGeminiPricing({
         model: 'gemini-2.5-flash',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.3,
-        outputUsdPerMillion: 2.5,
-        cacheReadUsdPerMillion: 0.03
+        input: 0.3,
+        output: 2.5,
+        cacheRead: 0.03
     }),
-    'gemini/gemini-2.5-flash-lite': createPricing({
-        provider: 'gemini',
+    'gemini/gemini-2.5-flash-lite': createGeminiPricing({
         model: 'gemini-2.5-flash-lite',
-        sourceUrl: GEMINI_PRICING_URL,
-        inputUsdPerMillion: 0.1,
-        outputUsdPerMillion: 0.4,
-        cacheReadUsdPerMillion: 0.01
+        input: 0.1,
+        output: 0.4,
+        cacheRead: 0.01
     }),
     'longcat/longcat-2.0': createPricing({
         provider: 'longcat',
@@ -412,53 +402,46 @@ export const PRICING = Object.freeze({
         inputUsdPerMillion: 0.193,
         outputUsdPerMillion: 0.65
     }),
-    'anthropic/claude-fable-5-1': createPricing({
-        provider: 'anthropic',
+    'anthropic/claude-fable-5-1': createAnthropicPricing({
         model: 'claude-fable-5-1',
-        sourceUrl: ANTHROPIC_PRICING_URL,
-        inputUsdPerMillion: 10,
-        outputUsdPerMillion: 50,
-        cacheReadUsdPerMillion: 0.25,
-        cacheWriteUsdPerMillion: 12.5
+        input: 10,
+        output: 50,
+        cacheRead: 0.25,
+        cacheWrite: 12.5
     }),
-    'anthropic/claude-opus-5': createPricing({
-        provider: 'anthropic',
+    'anthropic/claude-opus-5': createAnthropicPricing({
         model: 'claude-opus-5',
-        sourceUrl: ANTHROPIC_PRICING_URL,
-        inputUsdPerMillion: 5,
-        outputUsdPerMillion: 25,
-        cacheReadUsdPerMillion: 0.5,
-        cacheWriteUsdPerMillion: 6.25
+        input: 5,
+        output: 25,
+        cacheRead: 0.5,
+        cacheWrite: 6.25
     }),
-    'anthropic/claude-sonnet-5': createPricing({
-        provider: 'anthropic',
+    'anthropic/claude-sonnet-5': createAnthropicPricing({
         model: 'claude-sonnet-5',
-        sourceUrl: ANTHROPIC_PRICING_URL,
-        inputUsdPerMillion: 2,
-        outputUsdPerMillion: 10,
-        cacheReadUsdPerMillion: 0.2,
-        cacheWriteUsdPerMillion: 2.5
+        input: 2,
+        output: 10,
+        cacheRead: 0.2,
+        cacheWrite: 2.5
     }),
-    'anthropic/claude-haiku-4-5': createPricing({
-        provider: 'anthropic',
+    'anthropic/claude-haiku-4-5': createAnthropicPricing({
         model: 'claude-haiku-4-5',
-        sourceUrl: ANTHROPIC_PRICING_URL,
-        inputUsdPerMillion: 1,
-        outputUsdPerMillion: 5,
-        cacheReadUsdPerMillion: 0.1,
-        cacheWriteUsdPerMillion: 1.25
+        input: 1,
+        output: 5,
+        cacheRead: 0.1,
+        cacheWrite: 1.25
     }),
-    'anthropic/claude-haiku-4-5-20251001': createPricing({
-        provider: 'anthropic',
+    'anthropic/claude-haiku-4-5-20251001': createAnthropicPricing({
         model: 'claude-haiku-4-5-20251001',
-        sourceUrl: ANTHROPIC_PRICING_URL,
-        inputUsdPerMillion: 1,
-        outputUsdPerMillion: 5,
-        cacheReadUsdPerMillion: 0.1,
-        cacheWriteUsdPerMillion: 1.25
+        input: 1,
+        output: 5,
+        cacheRead: 0.1,
+        cacheWrite: 1.25
     })
 })
 
+/**
+ * Returns the numeric value if finite and non-negative, otherwise null.
+ */
 export function finiteNonNegative(value) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
         return null
@@ -467,6 +450,10 @@ export function finiteNonNegative(value) {
     return value
 }
 
+/**
+ * Normalizes an exchange rate value (number or string).
+ * Must be a positive finite number greater than zero.
+ */
 export function normalizeRate(value) {
     const numeric = typeof value === 'string' && value.trim() !== '' ? Number(value) : value
     return finiteNonNegative(numeric) && numeric > 0 ? numeric : null
@@ -476,11 +463,19 @@ function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : ''
 }
 
+/**
+ * Resolves the active model name for usage accounting.
+ * Honors usage-reported model first, falls back to current model unless focused tile is detached.
+ */
 export function resolveModelForUsage({ currentModel = '', focusedTile = false, usage = null } = {}) {
     const usageModel = normalizeText(usage?.model)
     return usageModel || (focusedTile ? '' : normalizeText(currentModel))
 }
 
+/**
+ * Checks if a session cost can be safely persisted to history.
+ * Requires a valid session ID, non-negative USD amount, and matching session IDs if specified in usage.
+ */
 export function canPersistCostHistory({ amountUsd = null, sessionId = '', usage = null } = {}) {
     const normalizedSessionId = normalizeText(sessionId)
     const usageSessionId = normalizeText(usage?.sessionId || usage?.session_id)
@@ -504,6 +499,9 @@ function serializeHistoryPricing(pricing) {
     }
 }
 
+/**
+ * Creates a cost history record for a session.
+ */
 export function createCostHistoryRecord(sessionId, result, updatedAt = Date.now()) {
     const normalizedSessionId = normalizeText(sessionId)
     const amountUsd = finiteNonNegative(result?.amountUsd)
@@ -522,6 +520,11 @@ export function createCostHistoryRecord(sessionId, result, updatedAt = Date.now(
     }
 }
 
+/**
+ * Normalizes and bounds the cost history store to MAX_COST_HISTORY_ENTRIES.
+ * Sorted descending by updatedAt so the most recent entries are preserved.
+ * With MAX_COST_HISTORY_ENTRIES = 200, sorting overhead is negligible (<1ms).
+ */
 export function normalizeCostHistory(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return {}
@@ -539,6 +542,9 @@ export function normalizeCostHistory(value) {
     return Object.fromEntries(records)
 }
 
+/**
+ * Upserts a session cost record into history and returns the updated history.
+ */
 export function upsertCostHistory(history, sessionId, result, updatedAt = Date.now()) {
     const normalizedHistory = normalizeCostHistory(history)
     const record = createCostHistoryRecord(sessionId, result, updatedAt)
@@ -557,6 +563,9 @@ export function upsertCostHistory(history, sessionId, result, updatedAt = Date.n
     })
 }
 
+/**
+ * Returns an array of cost history records.
+ */
 export function getCostHistoryEntries(history) {
     if (!history || typeof history !== 'object' || Array.isArray(history)) {
         return []
@@ -565,6 +574,9 @@ export function getCostHistoryEntries(history) {
     return Object.values(history)
 }
 
+/**
+ * Retrieves the stored cost result for a specific session ID from history.
+ */
 export function historyResultForSession(history, sessionId) {
     const normalizedSessionId = normalizeText(sessionId)
     const record = history && typeof history === 'object' && !Array.isArray(history)
@@ -591,6 +603,9 @@ function normalizePricingModel(value) {
     return PRICING_MODEL_ALIASES[unprefixedModel] || unprefixedModel
 }
 
+/**
+ * Looks up pricing by provider and model name.
+ */
 export function getPricing(provider, model) {
     const providerKey = normalizeText(provider).toLowerCase()
     const modelKey = normalizePricingModel(model)
@@ -627,6 +642,42 @@ function readOptionalTokenCount(usage, names, nested) {
     return nestedValue === undefined ? undefined : readTokenCount(nestedValue)
 }
 
+/**
+ * Derives cache token buckets from the cumulative UsageStats shape used by
+ * Hermes Desktop. `input` is the uncached input bucket, while `total` includes
+ * cached input and output. When the host reports cache_hit_pct, it is the
+ * session cache-read ratio over the complete prompt; otherwise the additional
+ * prompt tokens are treated as cache writes (the host omits the ratio when it
+ * has no cache reads).
+ */
+function inferCacheTokenCounts(usage, input, output) {
+    const total = readTokenCount(usage.total)
+    if (total === null) {
+        return { cachedInput: 0, cacheWriteInput: 0, input }
+    }
+
+    const promptTotal = total - output
+    const uncategorizedInput = promptTotal - input
+    if (promptTotal < input || uncategorizedInput <= 0) {
+        return { cachedInput: 0, cacheWriteInput: 0, input }
+    }
+
+    const cacheHitPct = finiteNonNegative(usage.cache_hit_pct)
+    if (cacheHitPct !== null && cacheHitPct <= 100) {
+        const cachedInput = Math.min(
+            uncategorizedInput,
+            Math.round(promptTotal * cacheHitPct / 100)
+        )
+        return {
+            cachedInput,
+            cacheWriteInput: uncategorizedInput - cachedInput,
+            input: promptTotal
+        }
+    }
+
+    return { cachedInput: 0, cacheWriteInput: uncategorizedInput, input: promptTotal }
+}
+
 function selectTier(usage, pricing) {
     const longContext = usage?.long_context === true || usage?.pricing_tier === 'long'
     if (!longContext) {
@@ -636,8 +687,12 @@ function selectTier(usage, pricing) {
     return pricing.longContext || null
 }
 
-export function calculateEstimatedUsd(usage, pricing) {
-    if (!usage || !pricing) {
+/**
+ * Extracts and validates token counts from a usage object.
+ * Returns null if required input or output counts are missing or invalid.
+ */
+export function extractUsageTokens(usage) {
+    if (!usage || typeof usage !== 'object') {
         return null
     }
 
@@ -653,6 +708,7 @@ export function calculateEstimatedUsd(usage, pricing) {
             'cached_input',
             'cache_read_input',
             'cache_read_input_tokens',
+            'cache_read_tokens',
             'cache_read',
             'input_cached'
         ],
@@ -664,6 +720,8 @@ export function calculateEstimatedUsd(usage, pricing) {
             'cache_write_input',
             'cache_write_input_tokens',
             'cache_creation_input_tokens',
+            'cache_write_tokens',
+            'cache_creation_tokens',
             'cache_write',
             'input_cache_write'
         ],
@@ -674,9 +732,85 @@ export function calculateEstimatedUsd(usage, pricing) {
         return null
     }
 
-    const cached = cachedInput ?? 0
-    const cacheWrite = cacheWriteInput ?? 0
-    if (cached + cacheWrite > input) {
+    const inferred = cachedInput === undefined && cacheWriteInput === undefined
+        ? inferCacheTokenCounts(usage, input, output)
+        : {
+            cachedInput: cachedInput ?? 0,
+            cacheWriteInput: cacheWriteInput ?? 0,
+            input: undefined
+        }
+    const total = readTokenCount(usage.total)
+    const promptTotal = total === null ? null : total - output
+    const effectiveInput = inferred.input ?? (
+        promptTotal !== null &&
+        promptTotal >= input + inferred.cachedInput + inferred.cacheWriteInput
+            ? promptTotal
+            : input
+    )
+
+    return {
+        cachedInput: inferred.cachedInput,
+        cacheWriteInput: inferred.cacheWriteInput,
+        input: effectiveInput,
+        output
+    }
+}
+
+/**
+ * Validates that cached and cache-write tokens do not exceed the total input tokens.
+ */
+export function isTokenCountValid(tokens) {
+    if (!tokens) {
+        return false
+    }
+
+    return tokens.cachedInput + tokens.cacheWriteInput <= tokens.input
+}
+
+/**
+ * Calculates the USD cost for given token counts and pricing tier rates.
+ * Returns null if required prices are missing or invalid for the used token types.
+ */
+export function calculateTokenCostUsd(tokens, tier) {
+    if (!tokens || !tier) {
+        return null
+    }
+
+    const ordinaryInputPrice = finiteNonNegative(tier.inputUsdPerMillion)
+    const outputPrice = finiteNonNegative(tier.outputUsdPerMillion)
+    const cacheReadPrice = finiteNonNegative(tier.cacheReadUsdPerMillion)
+    const cacheWritePrice = finiteNonNegative(tier.cacheWriteUsdPerMillion)
+
+    if (ordinaryInputPrice === null || outputPrice === null) {
+        return null
+    }
+    if (tokens.cachedInput > 0 && cacheReadPrice === null) {
+        return null
+    }
+    if (tokens.cacheWriteInput > 0 && cacheWritePrice === null) {
+        return null
+    }
+
+    const ordinaryInput = tokens.input - tokens.cachedInput - tokens.cacheWriteInput
+    return (
+        ordinaryInput * ordinaryInputPrice +
+        tokens.cachedInput * (cacheReadPrice ?? 0) +
+        tokens.cacheWriteInput * (cacheWritePrice ?? 0) +
+        tokens.output * outputPrice
+    ) / MILLION
+}
+
+/**
+ * Estimates USD cost based on token counts and model pricing definitions.
+ * Returns null when tokens are invalid, pricing is unavailable, or tiers cannot be matched.
+ */
+export function calculateEstimatedUsd(usage, pricing) {
+    if (!usage || !pricing) {
+        return null
+    }
+
+    const tokens = extractUsageTokens(usage)
+    if (!tokens || !isTokenCountValid(tokens)) {
         return null
     }
 
@@ -685,29 +819,17 @@ export function calculateEstimatedUsd(usage, pricing) {
         return null
     }
 
-    const ordinaryInputPrice = finiteNonNegative(tier.inputUsdPerMillion)
-    const outputPrice = finiteNonNegative(tier.outputUsdPerMillion)
-    const cacheReadPrice = finiteNonNegative(tier.cacheReadUsdPerMillion)
-    const cacheWritePrice = finiteNonNegative(tier.cacheWriteUsdPerMillion)
-    if (ordinaryInputPrice === null || outputPrice === null) {
-        return null
-    }
-    if (cached > 0 && cacheReadPrice === null) {
-        return null
-    }
-    if (cacheWrite > 0 && cacheWritePrice === null) {
-        return null
-    }
-
-    const ordinaryInput = input - cached - cacheWrite
-    return (
-        ordinaryInput * ordinaryInputPrice +
-        cached * (cacheReadPrice ?? 0) +
-        cacheWrite * (cacheWritePrice ?? 0) +
-        output * outputPrice
-    ) / MILLION
+    return calculateTokenCostUsd(tokens, tier)
 }
 
+/**
+ * Calculates session LLM cost from usage and pricing definitions.
+ * Applies strict precedence:
+ * 1. Positive provider-reported cost (`cost_usd > 0`) -> 'provider-reported'
+ * 2. Token-based calculation when pricing is known -> 'estimated'
+ * 3. Free/zero-cost provider reporting when no estimate is possible -> 'included'
+ * 4. Otherwise -> 'unknown' with amount null
+ */
 export function calculateCost({ sessionId = null, provider = '', model = '', usage = null } = {}) {
     const normalizedProvider = normalizeText(provider).toLowerCase()
     const normalizedModel = normalizeText(model)
@@ -760,6 +882,9 @@ export function calculateCost({ sessionId = null, provider = '', model = '', usa
     }
 }
 
+/**
+ * Formats a JPY amount with currency symbol and fixed decimals.
+ */
 export function formatJpy(amount) {
     const numeric = finiteNonNegative(amount)
     return numeric === null
@@ -770,6 +895,9 @@ export function formatJpy(amount) {
         })}`
 }
 
+/**
+ * Formats a USD amount as currency.
+ */
 export function formatUsd(amount) {
     const numeric = finiteNonNegative(amount)
     if (numeric === null) {
