@@ -117,12 +117,14 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 
 ## 計算ルール
 
-- Hermesの正の有限な`focusedUsage.cost_usd`を最優先します。`cost_usd`が`0`でも、料金表にモデル名があり`input`と`output`が有効なら固定料金から概算し、トークン情報がない場合だけ`Included`として扱います。
-- `cost_usd`がない場合、公開されているprovider/modelの固定料金表と`input`、`output`から推定します。
+- `focusedUsage.actual_cost_usd`が有限な非負数なら実績値として最優先します。`0`も有効値として扱い、`estimated_cost_usd`やローカル推定で上書きしません。
+- `actual_cost_usd`がnull・未提供・無効値の場合は、有限な非負数の`estimated_cost_usd`を採用します。`estimated_cost_usd`の`0`もGatewayが返した推定値として採用します。
+- 2つのGateway料金値が利用できない場合は、旧Gateway向けに公開されているprovider/modelの固定料金表と`input`、`output`からトークン推定へフォールバックします。旧形式の正の`focusedUsage.cost_usd`も互換性のため引き続き実績値として扱います。
 - 現行SDKでproviderが取得できない場合、または取得したproviderに料金表上の一致がない場合は、モデル名が固定料金表上で一意に対応するときだけ公式API料金のproviderを補完します。`openai/gpt-5.6-luna`のようなprovider接頭辞付きモデル名は接頭辞を除いて照合します。複数providerに同名モデルがある場合や、モデルが料金表にない場合は`Cost n/a`にします。`focusedSessionProfile`をproviderとして推測しません。
 - 公開されている`host.state.model`はmain modelです。フォーカス中セッションの`focusedUsage.model`が提供される場合はそれを優先し、提供されないタイルではmodelを推測せず、固定料金によるフォールバックを停止します。
 - `focusedUsage.input`はキャッシュされていない入力、`focusedUsage.total`はキャッシュ読み取り・書き込みと出力を含む累計です。キャッシュ内訳が明示された入力を優先し、内訳がない現行SDKでは`total - input - output`を追加入力として復元します。`cache_hit_pct`があれば読み取りと書き込みへ分け、割合がない場合は追加分をcache writeとして扱います。Anthropicの`cache_read_input_tokens`と`cache_creation_input_tokens`も読み取ります。
 - `total`やreasoning tokensは入力・出力へ重複加算しません。
+- 表示額は、`actual_cost_usd`が有効ならGatewayの実績値、なければ`estimated_cost_usd`のGateway推定値、両方なければセッション累計の`focusedUsage`へ固定料金表を適用したローカル推定値です。いずれも請求画面の代替ではなく、APIコール単位の段階料金・最低料金・モデルやproviderの切替・キャッシュやreasoning tokenの扱い・プロバイダー固有の丸めや割引が累計usageへ完全に反映されない場合、実際の請求額と乖離することがあります。正確な請求額は各プロバイダーの請求情報を確認してください。
 - 固定料金表にないprovider/modelは`Cost n/a`であり、`¥0`にはしません。
 - セッションIDは`focusedStoredSessionId`を優先し、永続IDがまだ確定していない場合だけruntime IDを一時キーとして使います。usageにセッションIDが含まれる場合は表示中IDと一致するときだけ保存します。有効なコストをUSDスナップショットとしてプラグインの`ctx.storage`へ最大200件保存し、履歴には最新10件を表示します。履歴表示時のJPYは現在の換算レートから再計算し、設定欄のクリア操作で削除できます。
 

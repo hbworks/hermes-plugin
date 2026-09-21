@@ -825,23 +825,27 @@ export function calculateEstimatedUsd(usage, pricing) {
 /**
  * Calculates session LLM cost from usage and pricing definitions.
  * Applies strict precedence:
- * 1. Positive provider-reported cost (`cost_usd > 0`) -> 'provider-reported'
- * 2. Token-based calculation when pricing is known -> 'estimated'
- * 3. Free/zero-cost provider reporting when no estimate is possible -> 'included'
- * 4. Otherwise -> 'unknown' with amount null
+ * 1. Valid actual cost (`actual_cost_usd`) -> 'provider-reported'
+ * 2. Valid Gateway estimate (`estimated_cost_usd`) -> 'estimated'
+ * 3. Legacy provider-reported cost (`cost_usd > 0`) -> 'provider-reported'
+ * 4. Token-based calculation when pricing is known -> 'estimated'
+ * 5. Free/zero-cost provider reporting when no estimate is possible -> 'included'
+ * 6. Otherwise -> 'unknown' with amount null
  */
 export function calculateCost({ sessionId = null, provider = '', model = '', usage = null } = {}) {
     const normalizedProvider = normalizeText(provider).toLowerCase()
     const normalizedModel = normalizeText(model)
     const normalizedSessionId = normalizeText(sessionId) || null
-    const reportedCost = finiteNonNegative(usage?.cost_usd)
+    const actualCost = finiteNonNegative(usage?.actual_cost_usd)
+    const gatewayEstimatedCost = finiteNonNegative(usage?.estimated_cost_usd)
+    const legacyReportedCost = finiteNonNegative(usage?.cost_usd)
     const pricing = getPricing(normalizedProvider, normalizedModel) ||
         getPricingByModel(normalizedModel)
     const resolvedProvider = pricing?.provider || normalizedProvider
 
-    if (reportedCost !== null && reportedCost > 0) {
+    if (actualCost !== null) {
         return {
-            amountUsd: reportedCost,
+            amountUsd: actualCost,
             model: normalizedModel,
             pricing,
             provider: resolvedProvider,
@@ -850,8 +854,30 @@ export function calculateCost({ sessionId = null, provider = '', model = '', usa
         }
     }
 
-    const estimatedCost = calculateEstimatedUsd(usage, pricing)
-    if (reportedCost === 0 && estimatedCost === null) {
+    if (gatewayEstimatedCost !== null) {
+        return {
+            amountUsd: gatewayEstimatedCost,
+            model: normalizedModel,
+            pricing,
+            provider: resolvedProvider,
+            sessionId: normalizedSessionId,
+            status: 'estimated'
+        }
+    }
+
+    if (legacyReportedCost !== null && legacyReportedCost > 0) {
+        return {
+            amountUsd: legacyReportedCost,
+            model: normalizedModel,
+            pricing,
+            provider: resolvedProvider,
+            sessionId: normalizedSessionId,
+            status: 'provider-reported'
+        }
+    }
+
+    const tokenEstimatedCost = calculateEstimatedUsd(usage, pricing)
+    if (legacyReportedCost === 0 && tokenEstimatedCost === null) {
         return {
             amountUsd: 0,
             model: normalizedModel,
@@ -861,7 +887,7 @@ export function calculateCost({ sessionId = null, provider = '', model = '', usa
             status: 'included'
         }
     }
-    if (estimatedCost === null) {
+    if (tokenEstimatedCost === null) {
         return {
             amountUsd: null,
             model: normalizedModel,
@@ -873,7 +899,7 @@ export function calculateCost({ sessionId = null, provider = '', model = '', usa
     }
 
     return {
-        amountUsd: estimatedCost,
+        amountUsd: tokenEstimatedCost,
         model: normalizedModel,
         pricing,
         provider: resolvedProvider,

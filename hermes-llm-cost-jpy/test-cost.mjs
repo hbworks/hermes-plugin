@@ -238,6 +238,54 @@ const providerReported = calculateCost({
 assert.equal(providerReported.amountUsd, 0.42)
 assert.equal(providerReported.status, 'provider-reported')
 
+const actualCost = calculateCost({
+    model: 'unregistered-model',
+    provider: 'unknown-provider',
+    usage: { actual_cost_usd: 0.42, cost_usd: 8.88, estimated_cost_usd: 9.99 }
+})
+assert.equal(actualCost.amountUsd, 0.42)
+assert.equal(actualCost.status, 'provider-reported')
+
+const actualZeroCost = calculateCost({
+    model: 'unregistered-model',
+    provider: 'unknown-provider',
+    usage: { actual_cost_usd: 0, estimated_cost_usd: 9.99 }
+})
+assert.equal(actualZeroCost.amountUsd, 0)
+assert.equal(actualZeroCost.status, 'provider-reported')
+
+const estimatedGatewayCost = calculateCost({
+    model: 'unregistered-model',
+    provider: 'unknown-provider',
+    usage: { actual_cost_usd: null, cost_usd: 8.88, estimated_cost_usd: 0.84 }
+})
+assert.equal(estimatedGatewayCost.amountUsd, 0.84)
+assert.equal(estimatedGatewayCost.status, 'estimated')
+
+const estimatedZeroGatewayCost = calculateCost({
+    model: 'unregistered-model',
+    provider: 'unknown-provider',
+    usage: { actual_cost_usd: null, estimated_cost_usd: 0 }
+})
+assert.equal(estimatedZeroGatewayCost.amountUsd, 0)
+assert.equal(estimatedZeroGatewayCost.status, 'estimated')
+
+const invalidActualUsesEstimate = calculateCost({
+    model: 'unregistered-model',
+    provider: 'unknown-provider',
+    usage: { actual_cost_usd: Number.NaN, estimated_cost_usd: 0.84 }
+})
+assert.equal(invalidActualUsesEstimate.amountUsd, 0.84)
+assert.equal(invalidActualUsesEstimate.status, 'estimated')
+
+const legacyGatewayTokenEstimate = calculateCost({
+    model: 'gpt-5.6-luna',
+    provider: 'openai-api',
+    usage: { actual_cost_usd: null, estimated_cost_usd: null, input: 1_000_000, output: 0 }
+})
+assert.equal(legacyGatewayTokenEstimate.amountUsd, 0.2)
+assert.equal(legacyGatewayTokenEstimate.status, 'estimated')
+
 const included = calculateCost({
     model: 'unregistered-model',
     provider: 'unknown-provider',
