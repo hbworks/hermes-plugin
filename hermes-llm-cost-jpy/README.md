@@ -26,6 +26,7 @@ Runtime pluginのentrypointは`plugin.js`単体です。Hermes Desktopのloader�
 | Provider | Model | Input / 1M | Cached input / 1M | Cache write / 1M | Output / 1M |
 | --- | --- | ---: | ---: | ---: | ---: |
 | `openai-api` | `gpt-6-astra` | `$10.00` | `$1.00` | `$12.50` | `$50.00` |
+| `openai-api` | `gpt-6-luna` | `$0.10` | `$0.01` | `$0.125` | `$0.50` |
 | `openai-api` | `gpt-5.6-sol` | `$4.00` | `$0.40` | `$5.00` | `$20.00` |
 | `openai-api` | `gpt-5.6-terra` | `$2.00` | `$0.20` | `$2.50` | `$12.00` |
 | `openai-api` | `gpt-5.6-luna` | `$0.20` | `$0.02` | `$0.25` | `$1.20` |
@@ -55,7 +56,7 @@ Runtime pluginのentrypointは`plugin.js`単体です。Hermes Desktopのloader�
 | `openai-api` | `o4-mini` | `$1.10` | `$0.275` | `—` | `$4.40` |
 | `openai-api` | `o3-mini` | `$1.10` | `$0.55` | `—` | `$4.40` |
 
-OpenAIの長文脈料金は、明示的に`long_context === true`または`pricing_tier === 'long'`を受け取った場合だけ使います。対象は`gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.5-pro`、`gpt-5.4`、`gpt-5.4-pro`です。Geminiのlong tierも明示フラグがある場合だけ使います。現行Hermes TUI Gatewayの`focusedUsage`は`long_context`と`pricing_tier`を送信せず、`UsageStats`もセッション累計でリクエスト単位の閾値を公開しないため、標準Desktopのライブ表示ではlong tierへ切り替わりません。
+OpenAIの長文脈料金は、明示的に`long_context === true`または`pricing_tier === 'long'`を受け取った場合だけ使います。対象は`gpt-6-astra`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.5-pro`、`gpt-5.4`、`gpt-5.4-pro`です。Geminiのlong tierも明示フラグがある場合だけ使います。現行Hermes TUI Gatewayの`focusedUsage`は`long_context`と`pricing_tier`を送信せず、`UsageStats`もセッション累計でリクエスト単位の閾値を公開しないため、標準Desktopのライブ表示ではlong tierへ切り替わりません。
 
 ### Google Gemini (`gemini`)
 
@@ -111,9 +112,9 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 - LongCat: <https://artificialanalysis.ai/ja/models/longcat-2-0>
 - NVIDIA Nemotron: <https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b>
 
-確認日: `2026-09-18`
+既存料金表の確認日: `2026-09-18`。`gpt-6-luna` は `2026-09-27` に[OpenAI公式料金表](https://developers.openai.com/api/docs/pricing)で確認しました。
 
-料金表は固定定義です。実行時に料金API・為替API・外部ネットワークへアクセスしません。料金改定時は`plugin.js`、テスト用の`cost.mjs`、このREADMEを手動で更新してください。
+料金表は固定定義です。実行時に料金API・為替API・外部ネットワークへアクセスしません。料金改定時は`cost.mjs`とテスト、このREADMEを更新し、`scripts/sync-cost-runtime.mjs`で`plugin.js`の実行ブロックを同期してください。
 
 ## 計算ルール
 

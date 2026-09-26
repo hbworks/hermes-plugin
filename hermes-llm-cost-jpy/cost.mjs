@@ -27,7 +27,7 @@ const ANTHROPIC_PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/
 const LONGCAT_PRICING_URL = 'https://artificialanalysis.ai/ja/models/longcat-2-0'
 const NEMOTRON_PRICING_URL = 'https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b'
 
-/** Date when pricing tables were last verified against provider documentation */
+/** Default verification date for existing pricing records */
 const CHECKED_AT = '2026-09-18'
 
 const PRICING_MODEL_ALIASES = Object.freeze({
@@ -58,13 +58,14 @@ function createPricing({
     cacheReadUsdPerMillion = null,
     cacheWriteUsdPerMillion = null,
     longContextThreshold = null,
-    longContext = null
+    longContext = null,
+    checkedAt = CHECKED_AT
 }) {
     const pricing = {
         provider,
         model,
         sourceUrl,
-        checkedAt: CHECKED_AT,
+        checkedAt,
         inputUsdPerMillion,
         outputUsdPerMillion,
         cacheReadUsdPerMillion,
@@ -81,6 +82,7 @@ function createPricing({
 
 function createOpenAiPricing({
     model,
+    checkedAt = CHECKED_AT,
     input,
     output,
     cacheRead = null,
@@ -91,6 +93,7 @@ function createOpenAiPricing({
         provider: 'openai-api',
         model,
         sourceUrl: OPENAI_PRICING_URL,
+        checkedAt,
         inputUsdPerMillion: input,
         outputUsdPerMillion: output,
         cacheReadUsdPerMillion: cacheRead,
@@ -147,6 +150,15 @@ export const PRICING = Object.freeze({
         cacheRead: 1,
         cacheWrite: 12.5,
         longTier: createTier(20, 75, 2, 25)
+    }),
+    'openai-api/gpt-6-luna': createOpenAiPricing({
+        checkedAt: '2026-09-27',
+        model: 'gpt-6-luna',
+        input: 0.1,
+        output: 0.5,
+        cacheRead: 0.01,
+        cacheWrite: 0.125,
+        longTier: createTier(0.2, 0.75, 0.02, 0.25)
     }),
     'openai-api/gpt-5.6-sol': createOpenAiPricing({
         model: 'gpt-5.6-sol',

@@ -21,6 +21,31 @@ import {
 const pricing = getPricing('openai-api', 'gpt-5.6-luna')
 assert.ok(pricing)
 
+const gpt6LunaPricing = getPricing('openai-api', 'gpt-6-luna')
+assert.ok(gpt6LunaPricing, 'gpt-6-luna should have a verified price record')
+assert.deepEqual(
+    {
+        input: gpt6LunaPricing.inputUsdPerMillion,
+        output: gpt6LunaPricing.outputUsdPerMillion,
+        cacheRead: gpt6LunaPricing.cacheReadUsdPerMillion,
+        cacheWrite: gpt6LunaPricing.cacheWriteUsdPerMillion,
+        longContext: gpt6LunaPricing.longContext
+    },
+    {
+        input: 0.1,
+        output: 0.5,
+        cacheRead: 0.01,
+        cacheWrite: 0.125,
+        longContext: {
+            cacheReadUsdPerMillion: 0.02,
+            cacheWriteUsdPerMillion: 0.25,
+            inputUsdPerMillion: 0.2,
+            outputUsdPerMillion: 0.75
+        }
+    }
+)
+assert.equal(gpt6LunaPricing.checkedAt, '2026-09-27')
+
 assert.equal(
     calculateEstimatedUsd({ input: 1_000_000, output: 0 }, pricing),
     0.2
@@ -295,6 +320,19 @@ const currentGatewayTokenEstimate = calculateCost({
 })
 assert.equal(currentGatewayTokenEstimate.amountUsd, 0.2)
 assert.equal(currentGatewayTokenEstimate.status, 'estimated')
+
+const currentGatewayGpt6LunaEstimate = calculateCost({
+    model: 'gpt-6-luna',
+    provider: 'openai-api',
+    usage: {
+        input: 1_000_000,
+        model: 'gpt-6-luna',
+        output: 1_000_000,
+        total: 2_000_000
+    }
+})
+assert.equal(currentGatewayGpt6LunaEstimate.amountUsd, 0.6)
+assert.equal(currentGatewayGpt6LunaEstimate.status, 'estimated')
 
 const included = calculateCost({
     model: 'unregistered-model',
