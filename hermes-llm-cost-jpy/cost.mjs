@@ -679,6 +679,7 @@ function inferCacheTokenCounts(usage, input, output) {
 }
 
 function selectTier(usage, pricing) {
+    // Current TUI Gateway usage does not emit these tier markers; retain support for compatible hosts.
     const longContext = usage?.long_context === true || usage?.pricing_tier === 'long'
     if (!longContext) {
         return pricing
@@ -827,18 +828,19 @@ export function calculateEstimatedUsd(usage, pricing) {
  * Applies strict precedence:
  * 1. Valid actual cost (`actual_cost_usd`) -> 'provider-reported'
  * 2. Valid Gateway estimate (`estimated_cost_usd`) -> 'estimated'
- * 3. Legacy provider-reported cost (`cost_usd > 0`) -> 'provider-reported'
+ * 3. Legacy Gateway estimate (`cost_usd > 0`) -> 'estimated'
  * 4. Token-based calculation when pricing is known -> 'estimated'
- * 5. Free/zero-cost provider reporting when no estimate is possible -> 'included'
+ * 5. Legacy zero cost when no token estimate is possible -> 'included'
  * 6. Otherwise -> 'unknown' with amount null
  */
 export function calculateCost({ sessionId = null, provider = '', model = '', usage = null } = {}) {
     const normalizedProvider = normalizeText(provider).toLowerCase()
     const normalizedModel = normalizeText(model)
     const normalizedSessionId = normalizeText(sessionId) || null
+    // Optional compatibility fields: the current TUI Gateway's _get_usage() does not emit costs.
     const actualCost = finiteNonNegative(usage?.actual_cost_usd)
     const gatewayEstimatedCost = finiteNonNegative(usage?.estimated_cost_usd)
-    const legacyReportedCost = finiteNonNegative(usage?.cost_usd)
+    const legacyGatewayEstimate = finiteNonNegative(usage?.cost_usd)
     const pricing = getPricing(normalizedProvider, normalizedModel) ||
         getPricingByModel(normalizedModel)
     const resolvedProvider = pricing?.provider || normalizedProvider
@@ -865,19 +867,19 @@ export function calculateCost({ sessionId = null, provider = '', model = '', usa
         }
     }
 
-    if (legacyReportedCost !== null && legacyReportedCost > 0) {
+    if (legacyGatewayEstimate !== null && legacyGatewayEstimate > 0) {
         return {
-            amountUsd: legacyReportedCost,
+            amountUsd: legacyGatewayEstimate,
             model: normalizedModel,
             pricing,
             provider: resolvedProvider,
             sessionId: normalizedSessionId,
-            status: 'provider-reported'
+            status: 'estimated'
         }
     }
 
     const tokenEstimatedCost = calculateEstimatedUsd(usage, pricing)
-    if (legacyReportedCost === 0 && tokenEstimatedCost === null) {
+    if (legacyGatewayEstimate === 0 && tokenEstimatedCost === null) {
         return {
             amountUsd: 0,
             model: normalizedModel,

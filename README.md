@@ -138,7 +138,6 @@ hermes-plugin/
 │
 ├── preview-language-override/ # [Desktop] Preview browser language override
 │   ├── plugin.js
-│   ├── preload.js
 │   └── README.md
 │
 ├── credential-safety/         # [Agent] 4-layer secret redactor & offline scanner
@@ -171,7 +170,6 @@ hermes-plugin/
 ```bash
 # Run all unit tests across all plugins
 node --check preview-language-override/plugin.js
-node --check preview-language-override/preload.js
 python3 credential-safety/tests/test_credential_safety.py -v
 python3 sqlite-memory/tests/test_sqlite_memory.py -v
 python3 wiki-skill-evolution/tests/test_evolution.py -v
@@ -325,7 +323,6 @@ hermes-plugin/
 │
 ├── preview-language-override/ # [Desktop] プレビューブラウザの言語設定上書き
 │   ├── plugin.js
-│   ├── preload.js
 │   └── README.md
 │
 ├── credential-safety/         # [Agent] 認証情報漏洩防止・4層サニタイズ＆過去ログ監査
@@ -358,7 +355,6 @@ hermes-plugin/
 ```bash
 # 全プラグインのユニットテストを一括実行 (35テスト)
 node --check preview-language-override/plugin.js
-node --check preview-language-override/preload.js
 python3 credential-safety/tests/test_credential_safety.py -v
 python3 sqlite-memory/tests/test_sqlite_memory.py -v
 python3 wiki-skill-evolution/tests/test_evolution.py -v

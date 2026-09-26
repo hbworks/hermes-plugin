@@ -92,3 +92,96 @@ test('plugin disable cleanup is registered with the desktop loader', async () =>
     pluginCleanup?.()
   }
 })
+
+test('plugin does not install a guest preload owned by the desktop core', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'preview-language-override-preload-'))
+  installMocks(root)
+  writeModule(root, 'plugin.mjs', readFileSync(new URL('../plugin.js', import.meta.url), 'utf8'))
+
+  const attributes = new Map([
+    ['partition', 'persist:hermes-preview'],
+    ['src', 'about:blank']
+  ])
+  let preloadWrites = 0
+  const webview = {
+    addEventListener: () => {},
+    executeJavaScript: async () => ({}),
+    getAttribute: name => attributes.get(name) ?? null,
+    getURL: () => 'about:blank',
+    isConnected: true,
+    loadURL: () => Promise.resolve(),
+    reload: () => {},
+    removeAttribute: name => attributes.delete(name),
+    removeEventListener: () => {},
+    setAttribute: (name, value) => {
+      if (name === 'preload') {
+        preloadWrites += 1
+      }
+      attributes.set(name, value)
+    },
+    tagName: 'webview'
+  }
+  globalThis.document = {
+    documentElement: {},
+    querySelectorAll: () => [webview]
+  }
+
+  const { default: plugin } = await import(pathToFileURL(join(root, 'plugin.mjs')).href)
+  const disposeHooks = []
+  const pluginCleanup = plugin.register({
+    storage: {
+      get: (_key, fallback) => ({ ...fallback, enabled: true }),
+      set: () => {},
+      remove: () => {}
+    },
+    registerMany: () => () => {},
+    onDispose: callback => disposeHooks.push(callback)
+  })
+
+  try {
+    assert.equal(preloadWrites, 0)
+    assert.equal(attributes.has('preload'), false)
+  } finally {
+    disposeHooks[0]?.()
+    pluginCleanup?.()
+  }
+})
+
+test('preview language apply accepts a valid language list', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'preview-language-override-input-'))
+  installMocks(root)
+  writeModule(root, 'plugin.mjs', readFileSync(new URL('../plugin.js', import.meta.url), 'utf8'))
+  globalThis.document = {
+    documentElement: {},
+    querySelectorAll: () => []
+  }
+
+  const { default: plugin } = await import(pathToFileURL(join(root, 'plugin.mjs')).href)
+  const writes = []
+  let contributions = []
+  const disposeHooks = []
+  const pluginCleanup = plugin.register({
+    storage: {
+      get: (_key, fallback) => fallback,
+      set: (_key, value) => writes.push(value),
+      remove: () => {}
+    },
+    registerMany: next => {
+      contributions = next
+      return () => {}
+    },
+    onDispose: callback => disposeHooks.push(callback)
+  })
+
+  try {
+    const paneElement = contributions.find(contribution => contribution.id === 'pane').render()
+    const renderedPane = paneElement.type(paneElement.props)
+    const applyButton = renderedPane.props.children[3].props.children[0]
+
+    assert.doesNotThrow(() => applyButton.props.onClick())
+    assert.deepEqual(writes.at(-1), { enabled: true, languages: ['en-US', 'ja-JP', 'en-JP'] })
+  } finally {
+    disposeHooks[0]?.()
+    pluginCleanup?.()
+  }
+})

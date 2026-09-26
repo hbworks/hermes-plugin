@@ -654,6 +654,7 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
 function useSessionActions({
   host,
   t,
+  roster = [],
   poolLimits,
   setPoolLimits,
   hasDesktopPoolControl,
@@ -818,11 +819,94 @@ function useSessionActions({
         ? routes.find((r) => r.profile === targetBot || r.targetProfile === targetBot)
         : null;
       const routeTarget = targetRoute || targetBot;
+      const targetProfileName = targetRoute?.profile ?? targetBot;
+      const targetConnId = targetRoute?.connectionId ?? null;
+      const matchedProfile = Array.isArray(roster) ? roster.find((p) => p.name === targetBot) : null;
+      let targetSessionId = matchedProfile?.canonical_session?.resolved_id ||
+        matchedProfile?.canonical_session?.id ||
+        matchedProfile?.last_session?.resolved_id ||
+        matchedProfile?.last_session?.id ||
+        null;
+      if (typeof targetSessionId !== 'string' || !targetSessionId) targetSessionId = null;
 
-      if (typeof host?.switchProfile === 'function') {
-        await host.switchProfile(routeTarget);
-      } else if (typeof host?.openSession === 'function') {
-        await host.openSession({ profile: targetRoute?.profile ?? targetBot });
+      if (typeof host?.openSession !== 'function' && typeof host?.navigate !== 'function') {
+        throw new Error('Session navigation API is unavailable');
+      }
+
+      let releaseProfile = () => {};
+      try {
+        if (!targetSessionId && typeof host?.retainProfile === 'function') {
+          const release = await host.retainProfile(routeTarget, { spawnPriority: 'foreground' });
+          if (typeof release === 'function') releaseProfile = release;
+        }
+
+        if (!targetSessionId) {
+          let sessRes = null;
+          try {
+            if (typeof host?.requestProfile === 'function') {
+              sessRes = await host.requestProfile(
+                routeTarget,
+                'session.list',
+                { limit: 5, include_hidden: true },
+                undefined,
+                { spawnPriority: 'foreground' }
+              );
+            } else if (!targetRoute && typeof host?.request === 'function') {
+              sessRes = await host.request('session.list', {
+                profile: targetProfileName,
+                limit: 5,
+                include_hidden: true
+              });
+            }
+          } catch (_) {}
+
+          const nonTeam = (Array.isArray(sessRes?.sessions) ? sessRes.sessions : [])
+            .find((s) => !(s.title || '').toLowerCase().includes('group:'));
+          targetSessionId = nonTeam?.resolved_id || nonTeam?.id || null;
+          if (typeof targetSessionId !== 'string' || !targetSessionId) targetSessionId = null;
+        }
+
+        if (!targetSessionId) {
+          let createRes = null;
+          try {
+            if (typeof host?.requestProfile === 'function') {
+              createRes = await host.requestProfile(
+                routeTarget,
+                'session.create',
+                {},
+                undefined,
+                { spawnPriority: 'foreground' }
+              );
+            } else if (!targetRoute && typeof host?.request === 'function') {
+              createRes = await host.request('session.create', { profile: targetProfileName });
+            }
+          } catch (_) {}
+
+          targetSessionId = createRes?.session?.id || createRes?.id || null;
+          if (typeof targetSessionId !== 'string' || !targetSessionId) targetSessionId = null;
+        }
+
+        if (!targetSessionId) {
+          throw new Error(`No session is available for profile "${targetProfileName}"`);
+        }
+
+        if (typeof host?.ensureAgent === 'function') {
+          try {
+            await host.ensureAgent(targetConnId, targetProfileName);
+          } catch (_) {}
+        }
+
+        if (typeof host?.openSession === 'function') {
+          await host.openSession(targetSessionId, {
+            profile: targetProfileName,
+            route: targetRoute || undefined,
+            awaitHydration: false
+          });
+        } else {
+          host.navigate(`/${targetSessionId}`);
+        }
+      } finally {
+        releaseProfile();
       }
 
       setSwitchFeedback(`Switched to "${targetBot}"`);
@@ -1337,6 +1421,7 @@ function AgentActiveManagerPane() {
   } = useSessionActions({
     host,
     t,
+    roster: agentState.roster,
     poolLimits,
     setPoolLimits,
     hasDesktopPoolControl,

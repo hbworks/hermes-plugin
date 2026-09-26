@@ -10,14 +10,6 @@ const MAX_LANGUAGE_TAG_LENGTH = 64
 const DEFAULT_LANGUAGES = ['en-US', 'ja-JP', 'en-JP']
 const LANGUAGE_TAG_RE = /^(?:[A-Za-z0-9]{1,8})(?:-[A-Za-z0-9]{1,8})*$/
 const CONTROLLER_SLOT = Symbol.for('hermes.preview-language-override.controller')
-const CONFIG_PREFIX = 'hermes-preview-language:'
-const PRELOAD_URL = (() => {
-  try {
-    return new URL('./preload.js', import.meta.url).href
-  } catch (_) {
-    return ''
-  }
-})()
 
 const DEFAULT_SETTINGS = {
   enabled: false,
@@ -141,17 +133,6 @@ function navigatorOverrideScript(languages) {
 })()`
 }
 
-function guestConfigScript(languages) {
-  const serializedLanguages = JSON.stringify(languages)
-  const serializedPrefix = JSON.stringify(CONFIG_PREFIX)
-
-  return `(() => {
-  const prefix = ${serializedPrefix};
-  window.name = prefix + encodeURIComponent(JSON.stringify({ languages: ${serializedLanguages} }));
-  return true;
-})()`
-}
-
 function isPreviewWebview(value) {
   return value &&
     typeof value.getAttribute === 'function' &&
@@ -236,67 +217,7 @@ function createController(storage) {
     return result && typeof result.then === 'function' ? result : Promise.resolve(result)
   }
 
-  const ensurePreload = state => {
-    if (!PRELOAD_URL || !readSettings().enabled || state.preloadInstalled) {
-      return
-    }
-
-    try {
-      state.webview.setAttribute('preload', PRELOAD_URL)
-      state.preloadInstalled = true
-    } catch (_) {}
-  }
-
-  const restorePreload = state => {
-    if (!state.preloadInstalled) {
-      return
-    }
-
-    try {
-      if (state.originalPreload === null) {
-        state.webview.removeAttribute('preload')
-      } else {
-        state.webview.setAttribute('preload', state.originalPreload)
-      }
-    } catch (_) {}
-    state.preloadInstalled = false
-  }
-
-  const prepareGuest = async state => {
-    if (!readSettings().enabled || typeof state.webview.executeJavaScript !== 'function') {
-      return
-    }
-
-    ensurePreload(state)
-    try {
-      // window.name survives a cross-origin navigation and is available to the
-      // static preload before the page's document-start scripts run.
-      await state.webview.executeJavaScript(guestConfigScript(readSettings().languages))
-    } catch (_) {
-      // The first document can still be attaching; preload will use the last
-      // value and the navigation event will retry on the next load.
-    }
-  }
-
-  const clearGuestConfig = state => {
-    if (typeof state.webview.executeJavaScript !== 'function') {
-      return Promise.resolve()
-    }
-
-    const prefix = JSON.stringify(CONFIG_PREFIX)
-    try {
-      return Promise.resolve(state.webview.executeJavaScript(
-        `if (typeof window.name === 'string' && window.name.startsWith(${prefix})) window.name = ''; true`
-      )).catch(() => undefined)
-    } catch (_) {
-      return Promise.resolve()
-    }
-  }
-
-  const loadWithOverride = async (state, url, options = {}) => {
-    await prepareGuest(state)
-    return originalLoad(state, url, options)
-  }
+  const loadWithOverride = async (state, url, options = {}) => originalLoad(state, url, options)
 
   const reloadWithOverride = async state => {
     if (!readSettings().enabled) {
@@ -305,7 +226,6 @@ function createController(storage) {
 
     const url = currentGuestUrl(state.webview)
     if (isBlankUrl(url)) {
-      await prepareGuest(state)
       await applyNavigator(state)
       return true
     }
@@ -323,16 +243,13 @@ function createController(storage) {
 
   const restoreWithoutOverride = state => {
     state.headerApplied = false
-    restorePreload(state)
     const originalReload = state.originalReload
 
-    return clearGuestConfig(state).finally(() => {
-      if (typeof originalReload === 'function') {
-        try {
-          originalReload.call(state.webview)
-        } catch (_) {}
-      }
-    })
+    if (typeof originalReload === 'function') {
+      try {
+        originalReload.call(state.webview)
+      } catch (_) {}
+    }
   }
 
   const patchMethod = (state, name, wrapper) => {
@@ -365,7 +282,6 @@ function createController(storage) {
         } catch (_) {}
       }
     }
-    restorePreload(state)
     attached.delete(state.webview)
   }
 
@@ -377,18 +293,14 @@ function createController(storage) {
     const state = {
       headerApplied: false,
       listeners: [],
-      originalPreload: webview.getAttribute('preload') ?? null,
       originalReload: typeof webview.reload === 'function' ? webview.reload : null,
-      preloadInstalled: false,
       webview
     }
     attached.set(webview, state)
-    ensurePreload(state)
 
     const onReady = () => {
       if (readSettings().enabled) {
         void applyNavigator(state)
-        void clearGuestConfig(state)
       }
     }
     const onStop = () => {
@@ -626,7 +538,7 @@ function PreviewLanguagePane() {
         children: [
           jsx('div', { className: status.kind === 'warning' ? 'text-(--ui-warning)' : status.kind === 'success' ? 'text-(--ui-success)' : '', children: status.message }),
           observed.language && jsx('div', { children: `Last page result: navigator.language=${observed.language}; navigator.languages=${observed.languages.join(', ')}` }),
-          jsx('div', { className: 'leading-relaxed text-(--ui-text-quaternary)', children: 'Apply reloads the current preview page so an explicit loadURL request uses the selected header. The preload is best-effort; the post-load fallback handles existing tabs, while forms and hard-reload semantics remain native.' })
+          jsx('div', { className: 'leading-relaxed text-(--ui-text-quaternary)', children: 'Apply reloads the current preview page so an explicit loadURL request uses the selected header. The desktop core owns the preview guest preload, so navigator overrides run after document events; very early page scripts may still observe native values. Forms and hard-reload semantics remain native.' })
         ]
       })
     ]

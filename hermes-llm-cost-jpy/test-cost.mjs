@@ -230,13 +230,13 @@ assert.equal(estimated.amountUsd, 0.2)
 assert.equal(estimated.status, 'estimated')
 assert.equal(estimated.sessionId, 'session-a')
 
-const providerReported = calculateCost({
+const legacyGatewayEstimate = calculateCost({
     model: 'unregistered-model',
     provider: 'unknown-provider',
     usage: { cost_usd: 0.42, input: Number.NaN, output: Number.NaN }
 })
-assert.equal(providerReported.amountUsd, 0.42)
-assert.equal(providerReported.status, 'provider-reported')
+assert.equal(legacyGatewayEstimate.amountUsd, 0.42)
+assert.equal(legacyGatewayEstimate.status, 'estimated')
 
 const actualCost = calculateCost({
     model: 'unregistered-model',
@@ -278,13 +278,23 @@ const invalidActualUsesEstimate = calculateCost({
 assert.equal(invalidActualUsesEstimate.amountUsd, 0.84)
 assert.equal(invalidActualUsesEstimate.status, 'estimated')
 
-const legacyGatewayTokenEstimate = calculateCost({
+// Current TUI Gateway usage has token totals but no cost fields.
+const currentGatewayTokenEstimate = calculateCost({
     model: 'gpt-5.6-luna',
     provider: 'openai-api',
-    usage: { actual_cost_usd: null, estimated_cost_usd: null, input: 1_000_000, output: 0 }
+    usage: {
+        calls: 1,
+        completion: 0,
+        input: 1_000_000,
+        model: 'gpt-5.6-luna',
+        output: 0,
+        prompt: 1_000_000,
+        reasoning: 0,
+        total: 1_000_000
+    }
 })
-assert.equal(legacyGatewayTokenEstimate.amountUsd, 0.2)
-assert.equal(legacyGatewayTokenEstimate.status, 'estimated')
+assert.equal(currentGatewayTokenEstimate.amountUsd, 0.2)
+assert.equal(currentGatewayTokenEstimate.status, 'estimated')
 
 const included = calculateCost({
     model: 'unregistered-model',

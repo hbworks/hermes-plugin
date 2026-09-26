@@ -52,7 +52,6 @@ for plugin in credential-safety sqlite-memory wiki-skill-evolution; do
 done
 
 node --check preview-language-override/plugin.js
-node --check preview-language-override/preload.js
 node --test preview-language-override/tests/plugin-lifecycle.test.mjs
 ```
 
@@ -113,7 +112,6 @@ for plugin in credential-safety sqlite-memory wiki-skill-evolution; do
 done
 
 node --check preview-language-override/plugin.js
-node --check preview-language-override/preload.js
 node --test preview-language-override/tests/plugin-lifecycle.test.mjs
 ```
 

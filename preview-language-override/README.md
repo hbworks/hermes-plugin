@@ -8,7 +8,7 @@ A Hermes Desktop plugin that lets you choose the language tags used by the in-ap
 
 - Builds a configurable `Accept-Language` value for preview-browser top-level navigations.
 - Overrides `navigator.language` and `navigator.languages` in the preview page.
-- Attempts to use a small webview preload on subsequent reloads so the navigator override can run in the page's main world at document start.
+- Applies the navigator override after preview document events. The Desktop core owns the preview guest preload, so very early page scripts may observe Chromium's native values.
 - Applies the setting to existing preview tabs and automatically handles new preview webviews.
 - Persists the language list through the plugin-scoped Hermes storage.
 - Supports up to 10 BCP 47 language tags, such as `ja-JP`, `fr-FR`, and `zh-Hant-TW`.
@@ -26,10 +26,9 @@ navigator.languages: ja-JP,ja,en-US
 - The plugin targets Hermes Desktop's preview `<webview>` (`persist:hermes-preview`). It does not change the system browser, `browser_*` automation sessions, or the Hermes app renderer itself.
 - Applying a setting reloads the current preview page. This is required so the first top-level request can carry the new header; unsaved state in that page may be lost.
 - The header is supplied through the webview's `loadURL(..., { extraHeaders })` path for explicit address-bar/plugin navigations and Apply reloads. Page-initiated links and form submissions are not intercepted, so their HTTP method and body are preserved; those requests use Chromium's normal session header.
-- The plugin assigns `preload.js` on a best-effort basis. Existing WebView guests may already have been created before the attribute changes, so the post-load fallback is authoritative for existing tabs. When the preload is accepted, it can inject into the page's main world at document start; otherwise very early scripts can observe Chromium's native values. The plugin does not claim to change every iframe's navigator object.
-- The preload handoff uses a short-lived `window.name` marker containing only the selected language list; the marker is cleared after the document settles. Pages that depend on `window.name` should be tested explicitly.
+- Hermes Desktop exclusively owns the `persist:hermes-preview` guest preload under its security contract. This plugin therefore uses the post-load `executeJavaScript` fallback; scripts that run before `dom-ready` or the load events can observe Chromium's native values. The plugin does not claim to change every iframe's navigator object.
 - Hermes' native hard-reload action is left untouched to preserve cache-bypass and reload semantics; its request may therefore use Chromium's normal session header.
-- This is a renderer-side desktop plugin workaround. A future Hermes SDK hook around `webview` creation / `webRequest.onBeforeSendHeaders` would be the stronger way to guarantee document-start navigator values and session-wide headers.
+- This is a renderer-side desktop plugin workaround. A future Hermes SDK hook around the core preview guest preload / `webRequest.onBeforeSendHeaders` would be the stronger way to guarantee document-start navigator values and session-wide headers.
 
 ## Installation
 
@@ -59,7 +58,6 @@ After launching (or reloading) Hermes Desktop, enable **Preview Language Overrid
 ```text
 preview-language-override/
 ├── plugin.js
-├── preload.js
 └── README.md
 ```
 
@@ -67,7 +65,6 @@ preview-language-override/
 
 ```bash
 node --check preview-language-override/plugin.js
-node --check preview-language-override/preload.js
 ```
 
 <br>
@@ -85,7 +82,7 @@ Hermes Desktop のプレビューブラウザで、言語タグを任意に指�
 
 - プレビューブラウザのトップレベル遷移に付与する `Accept-Language` を設定
 - プレビュー内ページの `navigator.language` と `navigator.languages` を上書き
-- リロード後は WebView の preload を試行し、受理された場合はページの document-start で navigator 値を設定
+- プレビューの document イベント後に navigator 値を上書き（Hermes Desktop の core が guest preload を専有するため、非常に早い page script には標準値が見える場合があります）
 - 既存タブへの適用と、新しく作られたプレビュー WebView への自動適用
 - プラグイン専用ストレージへの設定保存
 - `ja-JP`、`fr-FR`、`zh-Hant-TW` などの BCP 47 言語タグに対応（最大10個）
@@ -103,8 +100,7 @@ navigator.languages: ja-JP,ja,en-US
 - 対象は Hermes Desktop 内のプレビュー WebView（`persist:hermes-preview`）です。通常のシステムブラウザ、`browser_*` 自動操作セッション、Hermes 本体の UI には影響しません。
 - 適用時は現在のプレビューページをリロードします。未保存のページ状態が失われる可能性があります。
 - HTTP ヘッダーは WebView の `loadURL(..., { extraHeaders })` 経由で、アドレスバーやプラグインが開始する遷移、Apply 時のリロードに設定します。ページ起点のリンクやフォーム送信は HTTP メソッドと本文を壊さないため傍受せず、通常の Chromium セッションヘッダーを使います。
-- `preload.js` の設定は best-effort です。既存 WebView のゲストが先に作成されている場合は post-load のフォールバックを使用します。preload が受理された場合は main world の document-start で上書きできますが、受理されない場合は非常に早いスクリプトや iframe で元の値が見える場合があります。
-- preload への設定受け渡しには、選択した言語リストだけを含む短時間の `window.name` マーカーを使い、ドキュメント確定後に削除します。`window.name` に依存するページは個別に確認してください。
+- Hermes Desktop の security contract により、`persist:hermes-preview` の guest preload は Desktop core が専有します。そのため本プラグインは post-load の `executeJavaScript` フォールバックを使用し、`dom-ready` や load イベントより前に実行される script には Chromium 標準の navigator 値が見える場合があります。iframe の navigator 値は対象外です。
 - Hermes 本体のハードリロード動作は、キャッシュ無視や reload semantics を壊さないため変更していません。そのリクエストでは通常の Chromium セッションヘッダーが使われる場合があります。
 
 ### 導入
@@ -135,7 +131,6 @@ Hermes Desktop を起動（または再読み込み）すると、**Settings →
 ```text
 preview-language-override/
 ├── plugin.js       # プラグイン本体
-├── preload.js      # WebView の document-start 用 preload
 └── README.md       # 本ドキュメント
 ```
 
@@ -143,5 +138,4 @@ preview-language-override/
 
 ```bash
 node --check preview-language-override/plugin.js
-node --check preview-language-override/preload.js
 ```
