@@ -6,7 +6,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 // 【第1層】基盤・定義層 (Foundation & Constants)
 // ============================================================================
 
-const RESET_BUTTON_DELAY_SEC = 120; // 120秒経過で強制停止・解放ボタンを表示
+const STUCK_TURN_DELAY_SEC = 120; // Show the turn-interrupt button after 120 seconds
 const LAST_INF_KEY = 'hermes_active_manager_last_inferences_v2';
 
 const loadStoredInferences = () => {
@@ -52,22 +52,24 @@ const t = {
   incSlot: 'Increase slot limit (+1)',
   decSlot: 'Decrease slot limit (-1)',
   slotUnavailable: 'Desktop internal API unavailable; slot limit is fixed (estimated: 3)',
-  resetAllTooltip: 'Stop backend inference and reset state for all busy agents',
-  resetSlotBtn: '↺ Reset & Free Slot',
-  resetSlotTooltip: (sec) => `Task running for ${sec}s. Click to force stop backend inference and immediately free slot`,
-  resetSlotNotif: (p) => `Stopped inference session and released slot for "${p}"`,
-  resetSlotPartialWarning: (p, ok, total) => `Partial failure stopping session for "${p}" (${ok}/${total} succeeded)`,
-  resetSlotError: (p, msg) => `Failed to stop session for "${p}": ${msg}`,
-  resetAllNotif: (count) => `Stopped ${count} busy agent(s)`,
-  resetAllPartial: (ok, total) => `Partial failure stopping busy agents (${ok}/${total} stopped)`,
-  resetAllFailed: (total) => `Failed to stop all busy agents (${total} agent(s))`,
-  apiUnavailable: 'Session stop API is unavailable',
-  modalTitle: 'All Agents Are Busy',
-  modalDesc1: (max) => `All active slots (${max}) are currently busy with reasoning or tool execution.`,
-  modalDesc2: 'Switching now may interrupt ongoing tasks or cause a timeout error while waiting for a free slot.',
+  resetAllTooltip: 'Interrupt the running turn for all busy agents',
+  resetSlotBtn: '↺ Interrupt Turn',
+  resetSlotTooltip: (sec) => `Task running for ${sec}s. Click to interrupt this session’s current turn`,
+  resetSlotNotif: (p) => `Interrupted the running turn for "${p}"`,
+  resetSlotPartialWarning: (p, ok, total) => `Partial failure interrupting "${p}" (${ok}/${total} succeeded)`,
+  resetSlotError: (p, msg) => `Failed to interrupt "${p}": ${msg}`,
+  resetAllNotif: (count) => `Interrupted ${count} busy agent turn(s)`,
+  resetAllPartial: (ok, total) => `Partial failure interrupting busy agents (${ok}/${total} interrupted)`,
+  resetAllFailed: (total) => `Failed to interrupt all busy agents (${total} agent(s))`,
+  apiUnavailable: 'Session interrupt API is unavailable',
+  resetAllBtn: '↺ Interrupt All',
+  interruptNotRunning: 'The session is no longer running',
+  modalTitle: 'Estimated Capacity Reached',
+  modalDesc1: (max) => `Tracked agents fill the estimated pool capacity (${max}); actual backend availability may differ.`,
+  modalDesc2: 'Switching may still time out while waiting for an available backend slot.',
   modalRunning: 'Currently running agents:',
-  safeSwitchGuardTitle: 'Safe Switch Guard',
-  safeSwitchGuardDesc: 'Prevents switch timeout when all slots are busy',
+  safeSwitchGuardTitle: 'Estimated Capacity Warning',
+  safeSwitchGuardDesc: 'Warns when observed activity approaches the estimated pool capacity; switching can still time out',
   runningTask: (sec) => `⏳ Running task... (${sec}s)`,
   stuckWarning: (sec) => `⚠️ Long running (${sec}s)`,
   slotTitle: 'TRACKED BACKEND SLOTS',
@@ -86,12 +88,13 @@ const sendNotification = (message, kind = 'info') => {
 const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
   const sid = ev.sessionId || ev.session_id || ev.session || ev.sid || p?.sessionId || p?.session_id;
 
-  if (sid && sMap[sid]) return sMap[sid];
+  const resolve = (profile) => {
+    if (sid) sMap[sid] = profile;
+    return { profile, sid };
+  };
 
-  if (sid && focusedSid && sid === focusedSid && focusedProfile) {
-    sMap[sid] = focusedProfile;
-    return focusedProfile;
-  }
+  if (sid && sMap[sid]) return { profile: sMap[sid], sid };
+  if (sid && focusedSid && sid === focusedSid && focusedProfile) return resolve(focusedProfile);
 
   const normalize = (value) => {
     const candidate = typeof value === 'string'
@@ -106,27 +109,54 @@ const extractProfile = (ev, p, roster, sMap, focusedProfile, focusedSid) => {
     ev.agent || ev.bot || ev.speaker || p?.agent || p?.bot || p?.speaker || p?.member || p?.agentName ||
     p?.from
   );
-  if (direct) {
-    if (sid) sMap[sid] = direct;
-    return direct;
-  }
+  if (direct) return resolve(direct);
 
-  const evProf = normalize(ev.profile || p?.profile);
-  if (evProf) {
-    if (evProf === 'default' && focusedProfile && focusedProfile !== 'default') {
-      if (sid) sMap[sid] = focusedProfile;
-      return focusedProfile;
+  const eventProfile = normalize(ev.profile || p?.profile);
+  if (eventProfile) {
+    if (eventProfile === 'default' && focusedProfile && focusedProfile !== 'default') {
+      return resolve(focusedProfile);
     }
-    if (sid) sMap[sid] = evProf;
-    return evProf;
+    return resolve(eventProfile);
   }
 
-  if (focusedProfile) {
-    if (sid) sMap[sid] = focusedProfile;
-    return focusedProfile;
-  }
+  return null;
+};
 
-  return '';
+const normalizeProfileName = (profile) => typeof profile === 'string' ? profile.trim().toLowerCase() : '';
+
+const FALLBACK_PROFILE = 'default';
+const isFallbackOnlyEvent = (ev, payload) => {
+  const hasAuthor = Boolean(
+    ev.turn_author || ev.turnAuthor || payload?.turn_author || payload?.turnAuthor ||
+    ev.author || payload?.author || ev.sender || payload?.sender ||
+    ev.agent || ev.bot || ev.speaker || payload?.agent || payload?.bot || payload?.speaker ||
+    payload?.member || payload?.agentName || payload?.from
+  );
+  return !hasAuthor && normalizeProfileName(ev.profile || payload?.profile) === FALLBACK_PROFILE;
+};
+
+const hasUniqueProfileRoute = (routes, profile) => {
+  if (!Array.isArray(routes)) return false;
+  const matches = routes.filter((route) =>
+    normalizeProfileName(route.profile) === normalizeProfileName(profile) ||
+    normalizeProfileName(route.targetProfile) === normalizeProfileName(profile)
+  );
+  return matches.length === 1;
+};
+
+const matchingSessionRoute = (routes, owner, profile) => {
+  const normalizedProfile = normalizeProfileName(profile);
+  const matching = Array.isArray(routes) ? routes.filter((route) =>
+    normalizeProfileName(route.profile) === normalizedProfile ||
+    normalizeProfileName(route.targetProfile) === normalizedProfile
+  ) : [];
+
+  if (owner?.connectionId) {
+    return matching.find((route) => route.connectionId === owner.connectionId) || null;
+  }
+  const localRoute = matching.filter((route) => route.mode === 'local' || route.connectionId === 'local');
+  if (localRoute.length === 1) return localRoute[0];
+  return matching.length === 1 ? matching[0] : null;
 };
 
 // UI スタイル定義（Hermes 公式 CSS 変数 / Design Tokens 準拠）
@@ -316,7 +346,7 @@ function usePoolLimits() {
 /**
  * 2. エージェント状態統合フック（Roster, SessionBotMap, Activity, Timers, Watchdog）
  */
-function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, focusedSidRef, poolLimits }) {
+function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, focusedSidRef, focusedOwnerRef, poolLimits }) {
   const [roster, setRoster] = useState([]);
   const [sessionBotMap, setSessionBotMap] = useState({});
   const [agentStatus, setAgentStatus] = useState({});
@@ -326,6 +356,7 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
 
   const rosterRef = useRef([]);
   const sessionBotMapRef = useRef({});
+  const sessionOwnerMapRef = useRef({});
   const agentStatusRef = useRef({});
   const lastActiveRef = useRef({});
 
@@ -379,19 +410,31 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
     }
   };
 
-  // プロファイル一覧とランタイムセッション情報の同期
+  // Initial profile inventory; keep this event-driven rather than polling.
   useEffect(() => {
     let isMounted = true;
     const syncRoster = async () => {
       try {
         if (typeof host?.request !== 'function') return;
-
         const res = await host.request('profiles.list', {});
         const profiles = Array.isArray(res?.profiles) ? res.profiles : [];
         if (!isMounted) return;
 
         const order = ['assistant', 'research', 'coding', 'copywriter', 'default'];
-        const sorted = [...profiles].sort((a, b) => {
+        const mergedProfiles = new Map();
+        for (const profile of profiles) {
+          if (!profile?.name) continue;
+          const existing = mergedProfiles.get(profile.name) || {};
+          mergedProfiles.set(profile.name, {
+            ...profile,
+            ...existing,
+            canonical_session: existing.canonical_session || profile.canonical_session,
+            last_session: existing.last_session || profile.last_session,
+            connectionId: existing.connectionId || profile.connectionId,
+            profile: existing.profile || profile.profile
+          });
+        }
+        const sorted = [...mergedProfiles.values()].sort((a, b) => {
           const ia = order.indexOf(a.name);
           const ib = order.indexOf(b.name);
           return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
@@ -401,27 +444,20 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
         rosterRef.current = sorted;
 
         const mapUpdate = {};
-
-        try {
-          const sessRes = await host.request('sessions.list', {}).catch(() => null);
-          const activeSessions = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
-          for (const s of activeSessions) {
-            const sId = s.id || s.sessionId || s.session_id;
-            const sProf = s.profile || s.profileName || s.agent;
-            if (sId && sProf) {
-              mapUpdate[sId] = String(sProf).toLowerCase();
-            }
-          }
-        } catch (_) {}
-
         if (focusedSidRef.current && focusedProfileRef.current) {
           mapUpdate[focusedSidRef.current] = focusedProfileRef.current;
+          const owner = focusedOwnerRef.current;
+          if (owner) sessionOwnerMapRef.current[focusedSidRef.current] = owner;
         }
 
         for (const p of sorted) {
           const cs = p.canonical_session || p.last_session;
-          const csId = cs?.resolved_id || cs?.id;
-          if (csId && !mapUpdate[csId]) mapUpdate[csId] = p.name;
+          const storedId = cs?.id;
+          const resolvedId = cs?.resolved_id;
+          const canonicalIds = [storedId, resolvedId].filter(Boolean);
+          for (const sid of canonicalIds) {
+            if (!mapUpdate[sid]) mapUpdate[sid] = p.name;
+          }
         }
 
         sessionBotMapRef.current = { ...sessionBotMapRef.current, ...mapUpdate };
@@ -454,8 +490,7 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
     };
 
     syncRoster();
-    const interval = setInterval(syncRoster, 4000);
-    return () => { isMounted = false; clearInterval(interval); };
+    return () => { isMounted = false; };
   }, []);
 
   // busyBySession または sessionBotMap 更新時の開始時間補完
@@ -466,6 +501,7 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
   // Gatewayイベントの監視（推論状態と直前推論履歴）
   useEffect(() => {
     if (typeof host?.onEvent !== 'function') return;
+
     const unsubscribe = host.onEvent('*', (event) => {
       if (!event) return;
       const eventType = (event.type || event.event || '').toLowerCase();
@@ -479,7 +515,7 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
       const role = payload?.role || payload?.message?.role || event.role;
       if (role === 'user' || role === 'system') return;
 
-      const rawProfile = extractProfile(
+      let identity = extractProfile(
         event,
         payload,
         rosterRef.current,
@@ -488,13 +524,53 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
         focusedSidRef.current
       );
 
-      if (!rawProfile) return;
-
-      const sid = event.sessionId || event.session_id || event.session || event.sid || payload?.sessionId || payload?.session_id;
-      if (sid && rawProfile) {
-        if (sessionBotMapRef.current[sid] !== rawProfile) {
-          sessionBotMapRef.current[sid] = rawProfile;
+      const sid = identity?.sid || event.sessionId || event.session_id || event.session || event.sid || payload?.sessionId || payload?.session_id;
+      const knownProfile = sid ? sessionBotMapRef.current[sid] : '';
+      const ownerRoute = sid ? sessionOwnerMapRef.current[sid] : null;
+      if (!identity && knownProfile) identity = { profile: knownProfile, sid };
+      const fallbackOnly = isFallbackOnlyEvent(event, payload);
+      let eventOwner = event.connectionId
+        ? { connectionId: event.connectionId, profile: event.profile || ownerRoute?.profile || identity?.profile || '' }
+        : event.profile
+          ? { connectionId: null, profile: event.profile }
+          : null;
+      if (fallbackOnly && event.connectionId) {
+        // Registry events are authoritative for their emitting connection.
+      } else if (fallbackOnly) {
+        const focusedOwner = focusedOwnerRef.current;
+        if (focusedOwner) {
+          eventOwner = { connectionId: focusedOwner.connectionId, profile: focusedOwner.profile };
+        } else if (ownerRoute) {
+          eventOwner = ownerRoute;
+        } else if (hasUniqueProfileRoute(rosterRef.current.map((profile) => ({
+          connectionId: 'local',
+          mode: 'local',
+          profile: profile.name,
+          targetProfile: profile.name
+        })), focusedProfileRef.current)) {
+          eventOwner = { connectionId: null, profile: focusedProfileRef.current };
+        } else {
+          return;
         }
+      }
+      if (!identity && !eventOwner) return;
+
+      const rawProfile = fallbackOnly
+        ? (eventOwner?.profile || identity?.profile || '')
+        : (identity?.profile || eventOwner?.profile || '');
+      if (!rawProfile) return;
+      if (sid && eventOwner) {
+        sessionOwnerMapRef.current[sid] = eventOwner;
+      }
+      if (sid) {
+        sessionBotMapRef.current[sid] = rawProfile;
+        setSessionBotMap((prev) => {
+          if (prev[sid] === rawProfile) return prev;
+          const next = { ...prev, [sid]: rawProfile };
+          sessionBotMapRef.current = next;
+          return next;
+        });
+        ensureBusyStartTimes(sessionBotMapRef.current);
       }
 
       const nowTime = Date.now();
@@ -637,6 +713,7 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
     roster,
     sessionBotMap,
     sessionBotMapRef,
+    sessionOwnerMapRef,
     agentStatus,
     agentStatusRef,
     lastInferenceMap,
@@ -654,12 +731,16 @@ function useAgentState({ busyBySession, busyBySessionRef, focusedProfileRef, foc
 function useSessionActions({
   host,
   t,
+  busyBySession = {},
+  busyBySessionRef,
   roster = [],
   poolLimits,
   setPoolLimits,
   hasDesktopPoolControl,
   sessionBotMapRef,
+  sessionOwnerMapRef,
   focusedProfileRef,
+  focusedOwnerRef,
   focusedSidRef,
   markInferenceFinished,
   busyProfiles,
@@ -691,67 +772,95 @@ function useSessionActions({
     }
   }, [focusedProfileRef.current, hasDesktopPoolControl]);
 
-  // 個別推論状態のリセット & スロット強制解放
+  // 個別セッションの実行中ターンを中断
   const handleResetInference = async (targetProfile, options = { silent: false }) => {
     try {
       const routes = typeof host?.profileRoutes === 'function'
         ? await host.profileRoutes().catch(() => null)
         : null;
-      const targetRoute = Array.isArray(routes)
-        ? routes.find((r) => r.profile === targetProfile || r.targetProfile === targetProfile)
-        : null;
-      const routeTarget = targetRoute || targetProfile;
-      const targetProfileName = targetRoute?.profile ?? targetProfile;
-
-      const activeSids = Object.entries(sessionBotMapRef.current)
-        .filter(([_, bot]) => bot === targetProfile || bot === targetProfileName)
+      const busySids = Object.entries(busyBySessionRef.current)
+        .filter(([, isBusy]) => isBusy)
         .map(([sid]) => sid);
+      const targetSessions = busySids
+        .filter((sid) => sessionBotMapRef.current[sid] === targetProfile || sessionBotMapRef.current[sid] === normalizeProfileName(targetProfile))
+        .map((sid) => [sid, sessionBotMapRef.current[sid]]);
+      const sourceOwner = focusedProfileRef.current === targetProfile ? focusedOwnerRef.current : null;
+      const targetSessionsByRoute = new Map();
 
-      if (focusedProfileRef.current === targetProfile && focusedSidRef.current && !activeSids.includes(focusedSidRef.current)) {
-        activeSids.push(focusedSidRef.current);
+      for (const [sid] of targetSessions) {
+        const owner = sessionOwnerMapRef.current[sid] ||
+          (sourceOwner && focusedSidRef.current === sid ? sourceOwner : null);
+        const route = matchingSessionRoute(routes, owner, targetProfile);
+        const routeTarget = route || targetProfile;
+        const key = route ? `${route.connectionId}\u0000${route.profile}` : `profile\u0000${normalizeProfileName(targetProfile)}`;
+        const group = targetSessionsByRoute.get(key) || { routeTarget, sessions: [] };
+        group.sessions.push(sid);
+        targetSessionsByRoute.set(key, group);
       }
 
-      const targetSids = activeSids.length > 0 ? activeSids : [null];
-      const stopPromises = [];
-      for (const sid of targetSids) {
-        const stopPayload = {
-          profile: targetProfileName,
-          abort: true,
-          ...(sid ? { sessionId: sid, session_id: sid } : {})
-        };
-        if (typeof host?.requestProfile === 'function') {
-          stopPromises.push(host.requestProfile(routeTarget, 'session.stop', stopPayload));
-        } else if (typeof host?.request === 'function') {
-          stopPromises.push(host.request('session.stop', stopPayload));
+      const activeSids = targetSessions.map(([sid]) => sid);
+      if (
+        focusedProfileRef.current === targetProfile &&
+        focusedSidRef.current &&
+        busyBySessionRef.current[focusedSidRef.current] &&
+        !activeSids.includes(focusedSidRef.current)
+      ) {
+        const route = matchingSessionRoute(routes, sourceOwner, targetProfile);
+        const routeTarget = route || targetProfile;
+        const key = route ? `${route.connectionId}\u0000${route.profile}` : `profile\u0000${normalizeProfileName(targetProfile)}`;
+        const group = targetSessionsByRoute.get(key) || { routeTarget, sessions: [] };
+        group.sessions.push(focusedSidRef.current);
+        targetSessionsByRoute.set(key, group);
+      }
+
+      const interruptPromises = [];
+      for (const { routeTarget, sessions } of targetSessionsByRoute.values()) {
+        for (const sid of sessions) {
+          if (!sid) continue;
+          const interruptPayload = { session_id: sid };
+          if (typeof host?.requestProfile === 'function') {
+            interruptPromises.push(host.requestProfile(routeTarget, 'session.interrupt', interruptPayload));
+          } else if (typeof routeTarget === 'string' && typeof host?.request === 'function') {
+            interruptPromises.push(host.request('session.interrupt', {
+              ...interruptPayload,
+              profile: routeTarget
+            }));
+          }
         }
       }
 
-      if (stopPromises.length === 0) {
+      if (interruptPromises.length === 0) {
         if (!options.silent) {
           sendNotification(t.resetSlotError(targetProfile, t.apiUnavailable), 'error');
         }
         return false;
       }
 
-      const results = await Promise.allSettled(stopPromises);
+      const results = await Promise.allSettled(interruptPromises);
       const rejected = results.filter((r) => r.status === 'rejected');
       if (rejected.length > 0) {
         const firstErr = rejected[0]?.reason;
-        const errMsg = firstErr?.message || String(firstErr || 'Failed to stop backend session');
-        if (rejected.length === stopPromises.length) {
+        const errMsg = firstErr?.message || String(firstErr || 'Failed to interrupt session');
+        if (rejected.length === interruptPromises.length) {
           if (!options.silent) {
             sendNotification(t.resetSlotError(targetProfile, errMsg), 'error');
           }
         } else {
-          const successCount = stopPromises.length - rejected.length;
+          const successCount = interruptPromises.length - rejected.length;
           if (!options.silent) {
-            sendNotification(t.resetSlotPartialWarning(targetProfile, successCount, stopPromises.length), 'warning');
+            sendNotification(t.resetSlotPartialWarning(targetProfile, successCount, interruptPromises.length), 'warning');
           }
         }
         return false;
       }
 
-      markInferenceFinished(targetProfile, 'Reset');
+      const refused = results.some((result) => result.value?.interrupted === false || result.value?.status === 'not_interrupted');
+      if (refused) {
+        if (!options.silent) sendNotification(t.resetSlotError(targetProfile, t.interruptNotRunning), 'warning');
+        return false;
+      }
+
+      markInferenceFinished(targetProfile, 'Interrupted');
       if (!options.silent) {
         sendNotification(t.resetSlotNotif(targetProfile), 'success');
       }
@@ -759,13 +868,13 @@ function useSessionActions({
     } catch (err) {
       console.error('[AgentActiveManager] Reset session error:', err);
       if (!options.silent) {
-        sendNotification(t.resetSlotError(targetProfile, err?.message || 'Error stopping session'), 'error');
+        sendNotification(t.resetSlotError(targetProfile, err?.message || 'Error interrupting session'), 'error');
       }
       return false;
     }
   };
 
-  // 全体リセット（すべてのビジープロファイルの停止を並行実行）
+  // 全体中断（すべてのビジープロファイルの実行中ターンへ並行送信）
   const handleResetAllBusy = async () => {
     const targets = [...busyProfiles];
     if (targets.length === 0) return;
@@ -815,9 +924,17 @@ function useSessionActions({
       const routes = typeof host?.profileRoutes === 'function'
         ? await host.profileRoutes().catch(() => null)
         : null;
-      const targetRoute = Array.isArray(routes)
-        ? routes.find((r) => r.profile === targetBot || r.targetProfile === targetBot)
-        : null;
+      const candidateRoutes = Array.isArray(routes)
+        ? routes.filter((route) => route.profile === targetBot || route.targetProfile === targetBot)
+        : [];
+      const targetRoute = candidateRoutes.length === 1
+        ? candidateRoutes[0]
+        : candidateRoutes.length > 1
+          ? matchingSessionRoute(routes, focusedOwnerRef.current, targetBot)
+          : null;
+      if (candidateRoutes.length > 1 && !targetRoute) {
+        throw new Error(`Profile "${targetBot}" has multiple Gateway routes; refusing an ambiguous switch`);
+      }
       const routeTarget = targetRoute || targetBot;
       const targetProfileName = targetRoute?.profile ?? targetBot;
       const targetConnId = targetRoute?.connectionId ?? null;
@@ -882,7 +999,7 @@ function useSessionActions({
             }
           } catch (_) {}
 
-          targetSessionId = createRes?.session?.id || createRes?.id || null;
+          targetSessionId = createRes?.stored_session_id || createRes?.session?.id || createRes?.id || null;
           if (typeof targetSessionId !== 'string' || !targetSessionId) targetSessionId = null;
         }
 
@@ -931,7 +1048,7 @@ function useSessionActions({
   };
 
   const handleRequestSwitch = (targetBot) => {
-    if (allRunningAreBusy) {
+    if (allRunningAreBusy && hasDesktopPoolControl) {
       setPendingSwitchTarget(targetBot);
     } else {
       performSwitch(targetBot, { expandSlot: false });
@@ -1008,7 +1125,7 @@ function SlotCapacityCard({
                 title: t.slotHelp,
                 style: { cursor: 'help', fontSize: '10px', opacity: 0.65, marginLeft: '2px' }
               }, 'ℹ️'),
-              allRunningAreBusy && Badge('ALL BUSY', 'var(--ui-badge-danger-bg, rgba(239, 68, 68, 0.15))', 'var(--ui-danger, #ef4444)')
+              allRunningAreBusy && Badge('CAPACITY EST.', 'var(--ui-badge-warning-bg, rgba(245, 158, 11, 0.15))', 'var(--ui-warning, #d97706)')
             ]
           }),
           jsxs('div', {
@@ -1044,7 +1161,7 @@ function SlotCapacityCard({
           }),
           jsx('span', {
             style: { fontSize: '11px', color: 'var(--ui-muted, #888888)' },
-            children: isFull ? (allRunningAreBusy ? '0 Free (All Busy)' : '0 Free (LRU Evictable - Est.)') : `${maxBackends - runningCount} Free Slots (Est.)`
+            children: isFull ? (allRunningAreBusy ? 'At Estimated Capacity' : '0 Free (LRU Evictable - Est.)') : `${maxBackends - runningCount} Free Slots (Est.)`
           })
         ]
       }),
@@ -1113,7 +1230,7 @@ function SlotCapacityCard({
 }
 
 /**
- * 2. エージェント単体行コンポーネント (120秒スタック判定・強制停止ボタン・経過時間)
+ * 2. エージェント単体行コンポーネント (120秒スタック判定・ターン中断ボタン・経過時間)
  */
 function AgentRow({
   bot,
@@ -1130,7 +1247,7 @@ function AgentRow({
 }) {
   const name = bot.name;
   const elapsedSec = (isBusy && cur?.start) ? Math.max(0, Math.floor((now - cur.start) / 1000)) : 0;
-  const isStuck = isBusy && elapsedSec >= RESET_BUTTON_DELAY_SEC;
+  const isStuck = isBusy && elapsedSec >= STUCK_TURN_DELAY_SEC;
 
   let statusLabel = 'Standby';
   let statusBg = 'var(--ui-badge-muted-bg, rgba(127, 127, 127, 0.12))';
@@ -1251,7 +1368,7 @@ function AgentListCard({
                 variant: 'secondary',
                 style: { padding: '2px 6px', fontSize: '10px' },
                 title: t.resetAllTooltip,
-                children: '↺ Reset All'
+                children: t.resetAllBtn
               })
             ]
           })
@@ -1350,7 +1467,7 @@ function SafeSwitchModal({
               onClick: () => onPerformSwitch(pendingSwitchTarget, { expandSlot: true }),
               variant: 'primary',
               style: { justifyContent: 'center', padding: '8px' },
-              children: `+1 Slot & Safe Switch (${maxBackends} → ${maxBackends + 1})`
+              children: `Temporarily Increase Capacity (${maxBackends} → ${maxBackends + 1})`
             }),
             Btn({
               onClick: () => onPerformSwitch(pendingSwitchTarget, { expandSlot: false }),
@@ -1388,6 +1505,9 @@ function AgentActiveManagerPane() {
   busyBySessionRef.current = busyBySession;
   const focusedProfileRef = useRef(focusedProfileName);
   focusedProfileRef.current = focusedProfileName;
+  const focusedOwner = useValue(host.state?.focusedSessionOwner) || null;
+  const focusedOwnerRef = useRef(focusedOwner);
+  focusedOwnerRef.current = focusedOwner;
   const focusedSidRef = useRef(focusedSessionId);
   focusedSidRef.current = focusedSessionId;
 
@@ -1399,6 +1519,7 @@ function AgentActiveManagerPane() {
     busyBySessionRef,
     focusedProfileRef,
     focusedSidRef,
+    focusedOwnerRef,
     poolLimits
   });
 
@@ -1421,12 +1542,16 @@ function AgentActiveManagerPane() {
   } = useSessionActions({
     host,
     t,
+    busyBySession,
+    busyBySessionRef,
     roster: agentState.roster,
     poolLimits,
     setPoolLimits,
     hasDesktopPoolControl,
     sessionBotMapRef: agentState.sessionBotMapRef,
+    sessionOwnerMapRef: agentState.sessionOwnerMapRef,
     focusedProfileRef,
+    focusedOwnerRef,
     focusedSidRef,
     markInferenceFinished: agentState.markInferenceFinished,
     busyProfiles: agentState.busyProfiles,
@@ -1494,7 +1619,7 @@ const ROUTES = ROUTES_AREA || 'routes';
 export default {
   id: 'agent-active-manager',
   name: 'Agent Active Manager',
-  description: 'Smart profile switcher and backend slot optimizer preventing free-slot timeouts.',
+  description: 'Estimates backend pool activity, monitors turns, and helps switch profiles.',
   defaultEnabled: true,
   register(ctx) {
     const entries = [

@@ -2,7 +2,7 @@
 
 [ English | [日本語](#japanese) ]
 
-A smart Hermes Desktop plugin to **monitor and manage local backend concurrency slots and inference states**, completely eliminating profile-switch timeout errors.
+A smart Hermes Desktop plugin to **estimate backend concurrency usage, monitor inference state, and manage safe profile switching**.
 
 ---
 
@@ -10,57 +10,53 @@ A smart Hermes Desktop plugin to **monitor and manage local backend concurrency 
 
 Hermes Desktop maintains a pool of running backend Python processes to enable rapid switching between agent profiles.
 
-However, several architectural constraints often led to frustrating profile-switch timeouts (`timed out while waiting for a free slot`):
+However, several architectural constraints can lead to profile-switch timeouts (`timed out while waiting for a free slot`):
 1. **Slot Limit**: Concurrently active backends are capped at a default limit (typically **3**).
 2. **LRU Eviction Delay**: Backends that communicated recently are protected from automatic eviction to preserve active sessions.
 3. **All-Busy Deadlock**: After interacting with several agents, switching to another agent encounters an all-busy state, blocking for 30 seconds before failing with a timeout error.
 4. **Sudden Concurrency Exhaustion**: Running long reasoning or tool chains across multiple profiles simultaneously drains available slots without clear visual feedback.
 
-**Agent Active Manager** tracks agent activity in real time, visualizes backend slot consumption, enables one-click forced session termination to free slots, and provides interactive safeguards when slot limits are reached.
+**Agent Active Manager** estimates agent activity, visualizes estimated pool usage, provides a one-click way to interrupt a stuck turn, and offers a capacity warning. The estimates do not prevent backend slot timeouts.
 
 ---
 
 ## 🌟 Key Features
 
-### 1. Real-time Slot Gauge & Quick Tuning (Tracked / Estimated)
-* Visualizes active backend instances (e.g., `3 / 3 Active (Est.)`) with dynamic color indicators based on real-time activity and LRU timeouts.
-* Displays live reasoning/tools as `Busy` and cached standby instances as `♨️ Warm`.
-* Quick adjustment buttons (`+1` / `-1` Slot) to instantly expand or shrink concurrency limits.
-* One-click idle expiration presets (`2m` / `5m` / `10m`) to quickly adjust LRU retirement timing.
+### 1. Estimated Pool Gauge & Quick Tuning
+* Estimates active backend instances (e.g., `3 / 3 Active (Est.)`) from observed gateway activity and idle timeouts.
+* Displays observed reasoning/tool activity as `Busy` and previously active instances as `♨️ Warm` (estimated state).
+* Pool limit and idle-eviction controls are available when the optional Desktop bridge exists.
 
-### 2. Backend Force Stop & Slot Liberation
-* When an agent task runs for 120 seconds or longer (suspected freeze or deadlock), an emergency `↺ Reset & Free Slot` button appears to explicitly send `session.stop` (`abort: true`) with exact runtime session IDs, immediately freeing occupied backend slots.
-* Global `↺ Reset All` button to parallelly terminate all busy sessions when a deadlock occurs.
+### 2. Interrupt Stuck Turns
+* When an agent task runs for 120 seconds or longer (suspected freeze or deadlock), an emergency `↺ Interrupt Turn` button sends the supported `session.interrupt` RPC for its runtime session ID.
+* Global `↺ Interrupt All` sends interrupts to sessions currently reported busy by the host. This interrupts turns; it does not terminate backend processes or guarantee a freed slot.
 
 ### 3. Recent Inference History Tracking
 * Displays the last action for each active agent with execution duration and timestamps (e.g., `⏱ Last: 15s ago (4s / Tool: search)`).
 * Real-time indicators for agents currently running reasoning (`🧠 Busy`) or executing tools (`⚡ tool_name`).
 
-### 4. All-Busy Safe Switch Guard & Dialog
-* When switching to another agent while all configured slots are busy running active workloads:
-  * Prevents abrupt task interruption and timeout errors by displaying an interactive warning dialog.
-  * Shows which agent is running and for how long, offering three safe options:
-    * **[+1 Slot & Safe Switch]**: Temporarily expands the slot limit to launch concurrently without timeouts, then automatically reverts.
-    * **[Force Switch (Risk of Timeout)]**: Proceeds immediately despite timeout risk.
-    * **[Cancel]**: Waits for ongoing work to complete.
+### 4. Estimated Capacity Warning
+* When observed activity reaches the estimated capacity, a warning may be shown; it cannot guarantee that switching will avoid a timeout.
+* With the Desktop pool-control bridge, users may temporarily increase capacity, continue despite timeout risk, or cancel. Without that bridge, switching proceeds normally; the warning cannot release a slot.
 
-### 5. One-Click Safe Switching
-* Clean transitions to desired agents via `Switch ➔` or `Open` buttons when idle slots or capacities are available, adhering strictly to official SDK contracts.
+### 5. Profile Switching
+* Uses the profile roster's stored session IDs and the public SDK `openSession` / routed Gateway APIs to switch profiles.
 
 ---
 
 ## ⚙️ Compatibility & Desktop Internal API Requirements
 
-* **Recommended Environment**: **Hermes Desktop 2026.1+**
+* **Recommended Environment**: A current Hermes Desktop build
 * **Desktop Internal API Dependency**:
-  * Dynamic slot limit expansion/reduction and idle eviction duration adjustments rely on Hermes Desktop's internal IPC interface (`window.hermesDesktop.setPoolLimits`).
-* **Automatic Fallback (Estimated 3-Slot Safe Mode)**:
-  * When running on non-supported desktop builds, web environments, or where `window.hermesDesktop.setPoolLimits` is unavailable, the plugin automatically falls back to an **Estimated 3-Slot Mode**.
-  * Slot adjustment buttons are safely disabled with a descriptive tooltip, while all core monitoring, inference history tracking, session stop (`session.stop`), and all-busy switch protection features continue to function seamlessly via official `@hermes/plugin-sdk`.
-* **Tracked / Estimated Backend State (Zero Polling Overhead)**:
-  * Because Hermes Desktop does not emit internal process exit events to plugins, active slots are accurately **tracked via real-time inference/tool events and estimated LRU idle expiration timers**. This fail-safe estimation guarantees zero risk of free-slot timeouts while maintaining strict adherence to plugin isolation boundaries.
-* **Zero Monkey-Patching / Strict SDK Conformance**:
-  * The plugin strictly adheres to official PluginContext contracts. It does **NOT** monkey-patch shared SDK objects (`host.warmProfile`), timers (`window.setTimeout`), or DOM pointer events, guaranteeing zero side effects or interference with other plugins and core Hermes features.
+  * Dynamic slot limit and idle eviction adjustments rely on `window.hermesDesktop.setPoolLimits`.
+* **Fallback when the Desktop pool bridge is unavailable**:
+  * Without `window.hermesDesktop.setPoolLimits`, the plugin displays a default 3-slot limit as an estimate; pool controls are disabled.
+  * Slot adjustment buttons are disabled with a descriptive tooltip. Monitoring and switch warnings remain available; turn interruption uses the `session.interrupt` Gateway RPC.
+* **Tracked / Estimated Backend State**:
+  * Because Hermes Desktop does not emit internal process exit events to plugins, active slots are **estimated from observed Gateway activity and idle expiration timers**. This is an estimate, not a guarantee that a backend process is still running.
+  * The capacity warning is heuristic. It cannot stop a new session from timing out, and the plugin does not implement a backend process or slot-release API.
+* **SDK and Gateway compatibility**:
+  * UI, profile routing, and Gateway events use the public `@hermes/plugin-sdk`. Pool limit controls use the optional Desktop bridge and are feature-detected.
 
 ---
 
@@ -103,66 +99,57 @@ agent-active-manager/
 
 [ [English](#agent-active-manager-hermes-desktop-plugin) | 日本語 ]
 
-Hermes Desktop における **「ローカルバックエンドの同時起動枠（スロット制限）」と「直前の推論状態」をスマートに管理・監視し、プロファイル切り替え時のタイムアウトエラーを完全に防止する** プラグインです。
+Hermes Desktop の **バックエンド枠の推定使用状況と推論状態を監視し、プロフィール切り替えを支援する** プラグインです。表示する枠数やタイムアウト回避は保証ではなく推定です。
 
 ---
 
 ## 🎯 背景・開発理由
 
-Hermes Desktop は複数のエージェントを高速に切り替えるため、各プロファイルのバックエンド（Python プロセス）を起動したまま保持するプール機能を持っています。
+Hermes Desktop は複数のエージェントを切り替えるため、バックエンドをプール管理します。枠数やビジー表示だけからは実際の空き状況を完全には把握できず、プロフィール切り替え時のタイムアウトを防げる保証はありません。
 
-しかし、以下の仕様によりプロファイル切り替えがタイムアウト（`timed out while waiting for a free slot`）する問題がありました：
-
-1. 同時に起動できるバックエンドの上限数（スロット枠）がデフォルトで **3** に制限されている。
-2. 直近に通信があったバックエンドはセッション保護のため自動終了（LRU 退避）されない。
-3. 3つのエージェントを操作した後に別のエージェントに切り替えようとすると、**「空きスロットがない（3/3 busy）」状態になり、30秒待機した末にタイムアウトエラーになる**。
-4. 複数プロファイルで推論やツール実行が重なると、現在のスロット消費状況が把握できず意図せずデッドロックに陥る。
-
-この **Agent Active Manager** は、エージェントの活動状態をリアルタイムに把握し、枠の逼迫や全枠ビジーを検知して安全な切り替えを支援します。
+この **Agent Active Manager** は、Gateway イベントから活動状態を推定して表示し、応答が止まったターンを中断する手段と、推定容量に達した際の注意を提供します。バックエンドプロセスの終了やスロット解放を保証する機能ではありません。
 
 ---
 
 ## 🌟 主な機能
 
-### 1. スロット枠 ＆ 推計使用状況のリアルタイム表示
-* リアルタイムの推論イベントとLRU退避時間に基づくアクティブバックエンド数（例: `3 / 3 Active (Est.)`）をカラーゲージで可視化。
+### 1. スロット枠 ＆ 推計使用状況の表示
+* 推論イベントとLRU退避時間からアクティブバックエンド数（例: `3 / 3 Active (Est.)`）を推計し、カラーゲージで表示。
 * 実行中のエージェントは `Busy`、メモリにキャッシュ保持されているエージェントは `♨️ Warm` として明確に区別して表示。
-* スロット枠のクイック調整（`+1` / `-1` ボタン）が可能。
-* アイドル自動解放時間（`idleMs`）をワンクリック（`2m` / `5m` / `10m`）で即座に変更可能。
+* スロット上限（`+1` / `-1`）とアイドル退避時間を変更できます。値の変更は Desktop pool-control bridge がある場合に有効です。
 
-### 2. バックエンド強制停止 ＆ スロット即時解放
-* エージェントのタスク・推論が120秒以上継続した場合（フリーズ・スタック疑い）にのみ非常停止用 `↺ 強制停止 & 解放` ボタンが出現し、対象のランタイムセッションIDを明示して `session.stop`（`abort: true`）を発行、占有されたスロットを確実に解放。
-* 全エージェントがビジー状態の際に一括で停止・解放を行う `↺ Reset All` ボタンを装備。
+### 2. 応答が止まったターンの中断
+* エージェントのタスク・推論が120秒以上継続した場合（フリーズ・スタック疑い）に `↺ Interrupt Turn` ボタンを表示し、対象のランタイムセッションIDを指定して、現行 Gateway が提供する `session.interrupt` を送信。
+* ホストがビジーと報告する各セッションへ `session.interrupt` を並行送信する `↺ Interrupt All` ボタンを装備。停止するのは実行中ターンであり、バックエンドプロセス終了やスロット解放を保証するものではありません。
 
 ### 3. 直前の推論履歴の追跡
 * どのアクティブエージェントが「いつ、何秒間、どんな処理（推論またはツール実行）」を完了したかをタイムスタンプ付き（例: `⏱ Last: 15s ago (4s / Tool: search)`）で表示。
 * 現在リアルタイムに推論中（`🧠 Busy`）またはツール実行中（`⚡ tool_name`）のエージェントをハイライト表示。
 
-### 4. 全枠ビジー時の安全確認ダイアログ
-* 設定されているスロット枠（例: 3枠）の**すべてでエージェントが推論・ツール実行中**の状態で別のエージェントへ切り替えようとした場合：
-  * 勝手に切り替えて作業を中断させたり、タイムアウトエラーを起こさせたりせず、**警告ダイアログを表示**します。
-  * 実行中のエージェント名と経過時間を明示し、以下の安全な選択肢を提供します：
-    * **[+1 Slot & Safe Switch]**（スロットを一時拡張してタイムアウトを防止し並行起動、切り替え完了後に自動復元）
-    * **[Force Switch (Risk of Timeout)]**（強制切り替え）
-    * **[Cancel]**（作業完了を待つ）
+### 4. 全枠ビジーと推定した場合の切り替え警告
+* 観測した活動が推定容量に達した状態で切り替えようとすると、Desktop pool-control bridge がある場合に警告ダイアログを表示します。使用状況は推定であり、警告や容量の一時拡張でもタイムアウトを防げる保証はありません。
+  * 実行中のエージェント名と経過時間を表示します。
+  * bridge がある場合は容量を一時拡張して切り替える、リスクを承知で続ける、またはキャンセルできます。
+  * bridge がない場合は警告を出さず通常どおり切り替えます。
 
-### 5. ワンクリック安全切り替え（Switch ➔）
-* スロットに空きがあるかアイドル中のエージェントが存在する場合は、公式 SDK 契約に準拠した安全な手順で目的のエージェントへと遷移します。
+### 5. プロフィール切り替え
+* 対象プロフィールの保存済みセッションIDと公開 SDK の `openSession` / routed Gateway API を使います。プロフィール名が複数 Gateway route と一致し、所有元を確定できない場合は誤った route を選ばず切り替えを中止します。
 
 ---
 
 ## ⚙️ 互換性および Desktop 内部 API について
 
-* **推奨環境**: **Hermes Desktop 2026.1 以降**
+* **推奨環境**: 現行の Hermes Desktop
 * **Desktop 内部 API の利用について**:
-  * スロット上限数（`maxBackends`）およびアイドル退避時間（`idleMs`）の動的変更機能は、Hermes Desktop の内部 Electron IPC（`window.hermesDesktop.setPoolLimits`）を利用しています。
-* **自動フォールバック動作（推定 3 スロット安全モード）**:
-  * 内部 API が非提供の環境（Web 版や将来の内部仕様変更時など）では、自動的に **推定 3 スロット安全モード** へフォールバックします。
-  * スロット変更ボタンは安全のため無効化（ツールチップで案内）されますが、エージェント監視・推論履歴追跡・セッション停止（`session.stop`）・全枠ビジー警告ダイアログ等の安全機能は公式 `@hermes/plugin-sdk` のみで完全に動作し続けます。
+  * スロット上限数（`maxBackends`）とアイドル退避時間（`idleMs`）の変更機能は `window.hermesDesktop.setPoolLimits` を利用します。
+* **Desktop pool bridge が利用できない場合のフォールバック**:
+  * `window.hermesDesktop.setPoolLimits` が利用できない場合は、デフォルト値の3枠を推定値として表示し、スロット操作を無効にします。
+  * スロット変更ボタンは無効化されます。監視と切り替え警告は継続し、実行中ターンの中断には Gateway の `session.interrupt` を利用します。
 * **推計追跡（Tracked / Estimated）アーキテクチャについて**:
-  * Hermes Desktop の仕様上、アイドルプロセスの内部終了イベント（kill通知）はプラグインへ公開されていません。そのため本プラグインでは、**「推論・ツール実行のリアルタイムイベント監視」と「設定されたLRUアイドルタイマー」を組み合わせた推計追跡**を採用しています。安全側に倒してスロット枠の逼迫を事前検知することで、プロファイル切り替え時のタイムアウトエラーを確実に未然防止します。
-* **モンキーパッチ排除・公式 SDK 契約への厳格な準拠**:
-  * 共有 SDK オブジェクト（`host.warmProfile` 等）の書き換えやグローバルタイマー（`window.setTimeout`）、マウスイベントの改変は一切行っていません。他のプラグインや Hermes 本体の動作に副作用を及ぼすことなく、安全に共存できます。
+  * Hermes Desktop の仕様上、アイドルプロセスの内部終了イベント（kill通知）はプラグインへ公開されていません。そのため本プラグインでは、**観測した Gateway 活動とアイドル退避時間からアクティブ枠数を推計**します。バックエンドの実プロセス状態を保証するものではありません。
+  * 全枠ビジーの警告は推定情報です。新しいセッションのタイムアウトを防止するものではなく、バックエンド停止やスロット解放 API を実装しているわけではありません。
+* **SDK / Gateway 互換性**:
+  * UI・プロフィールルーティング・Gateway イベントには公開 `@hermes/plugin-sdk` を利用します。スロット設定は任意提供の Desktop bridge capability を検出して操作します。
 
 ---
 
