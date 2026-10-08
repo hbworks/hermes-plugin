@@ -442,13 +442,20 @@ export const PRICING = Object.freeze({
         cacheRead: 0.1,
         cacheWrite: 1.25
     }),
-    'anthropic/claude-haiku-4-5-20251001': createAnthropicPricing({
-        model: 'claude-haiku-4-5-20251001',
-        input: 1,
-        output: 5,
+    'anthropic/claude-haiku-5-5': createAnthropicPricing({
+        model: 'claude-haiku-5-5',
+        input: 0.1,
+        output: 0.5,
+        cacheRead: 0.01,
+        cacheWrite: 0.125
+    }),
+    'anthropic/claude-sonnet-5-5': createAnthropicPricing({
+        model: 'claude-sonnet-5-5',
+        input: 2.0,
+        output: 10.0,
         cacheRead: 0.1,
-        cacheWrite: 1.25
-    })
+        cacheWrite: 2.5
+    }),
 })
 
 /**
