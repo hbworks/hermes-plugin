@@ -100,7 +100,8 @@ OpenAIの長文脈料金は、明示的に`long_context === true`または`prici
 | `claude-opus-5` | `$5.00` | `$0.50` | `$6.25` | `$25.00` |
 | `claude-sonnet-5` | `$2.00` | `$0.20` | `$2.50` | `$10.00` |
 | `claude-haiku-4-5` | `$1.00` | `$0.10` | `$1.25` | `$5.00` |
-| `claude-haiku-4-5-20251001` | `$1.00` | `$0.10` | `$1.25` | `$5.00` |
+| `claude-haiku-5-5` | `$0.10` | `$0.01` | `$0.125` | `$0.50` |
+| `claude-sonnet-5-5` | `$2.00` | `$0.10` | `$2.50` | `$10.00` |
 
 Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がないため5分cache writeとして計算します。1時間cache writeを自動推測しません。Claude 4.6以降の1M contextはStandard料金で扱われるため、OpenAI/Geminiのような長文脈割増tierは登録していません。
 
