@@ -98,22 +98,24 @@ OpenAIの長文脈料金は、明示的に`long_context === true`または`prici
 | --- | ---: | ---: | ---: | ---: |
 | `claude-fable-5-1` | `$10.00` | `$0.25` | `$12.50` | `$50.00` |
 | `claude-opus-5` | `$5.00` | `$0.50` | `$6.25` | `$25.00` |
+| `claude-opus-5-5` | `$4.00` | `$0.20` | `$5.00` | `$20.00` |
 | `claude-sonnet-5` | `$2.00` | `$0.20` | `$2.50` | `$10.00` |
 | `claude-haiku-4-5` | `$1.00` | `$0.10` | `$1.25` | `$5.00` |
 | `claude-haiku-5-5` | `$0.10` | `$0.01` | `$0.125` | `$0.50` |
 | `claude-sonnet-5-5` | `$2.00` | `$0.10` | `$2.50` | `$10.00` |
 
-Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がないため5分cache writeとして計算します。1時間cache writeを自動推測しません。Claude 4.6以降の1M contextはStandard料金で扱われるため、OpenAI/Geminiのような長文脈割増tierは登録していません。
+Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がないため5分cache writeとして計算します。1時間cache writeを自動推測しません。Claude 4.6以降の1M contextはStandard料金で扱われるため、OpenAI/Geminiのような長文脈割増tierは登録していません。Haiku 5.5のプロンプト100K超の料金、Opus 5.5のFast mode、米国内実行向けの推論価格はこのtoken計算へ混ぜません。
 
 出典:
 
 - OpenAI: <https://developers.openai.com/api/docs/pricing>
 - Google Gemini: <https://ai.google.dev/gemini-api/docs/pricing>
 - Anthropic: <https://platform.claude.com/docs/en/about-claude/pricing>
+- Anthropic（Fable 5.1 / Opus 5.5 / Sonnet 5.5）: <https://claude.com/ja/pricing#api>
 - LongCat: <https://artificialanalysis.ai/ja/models/longcat-2-0>
 - NVIDIA Nemotron: <https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b>
 
-既存料金表の確認日: `2026-09-18`。`gpt-6-luna` は `2026-09-27` に[OpenAI公式料金表](https://developers.openai.com/api/docs/pricing)で確認しました。
+既存料金表の確認日: `2026-09-18`。`gpt-6-luna` は `2026-09-27` に[OpenAI公式料金表](https://developers.openai.com/api/docs/pricing)で確認しました。Fable 5.1・Opus 5.5・Sonnet 5.5は`2026-10-10`に[Anthropic公式料金ページ](https://claude.com/ja/pricing#api)で確認しました。`claude-opus-5-5`のような日付サフィックス付きモデルID（例:`claude-opus-5-5-20261001`）はサフィックスを外して照合します。
 
 料金表は固定定義です。実行時に料金API・為替API・外部ネットワークへアクセスしません。料金改定時は`cost.mjs`とテスト、このREADMEを更新し、`scripts/sync-cost-runtime.mjs`で`plugin.js`の実行ブロックを同期してください。
 

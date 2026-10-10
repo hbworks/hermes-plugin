@@ -428,6 +428,13 @@ export const PRICING = Object.freeze({
         cacheRead: 0.5,
         cacheWrite: 6.25
     }),
+    'anthropic/claude-opus-5-5': createAnthropicPricing({
+        model: 'claude-opus-5-5',
+        input: 4,
+        output: 20,
+        cacheRead: 0.2,
+        cacheWrite: 5
+    }),
     'anthropic/claude-sonnet-5': createAnthropicPricing({
         model: 'claude-sonnet-5',
         input: 2,
@@ -451,8 +458,8 @@ export const PRICING = Object.freeze({
     }),
     'anthropic/claude-sonnet-5-5': createAnthropicPricing({
         model: 'claude-sonnet-5-5',
-        input: 2.0,
-        output: 10.0,
+        input: 2,
+        output: 10,
         cacheRead: 0.1,
         cacheWrite: 2.5
     }),
@@ -615,11 +622,16 @@ export function historyResultForSession(history, sessionId) {
     }
 }
 
+/** Anthropic のモデルIDに付く 8 桁の日付サフィックス（例: `-20251001`） */
+const PRICING_MODEL_DATE_SUFFIX = /-\d{8}$/
+
 function normalizePricingModel(value) {
     const modelKey = normalizeText(value).toLowerCase()
     const separator = modelKey.lastIndexOf('/')
     const unprefixedModel = separator === -1 ? modelKey : modelKey.slice(separator + 1)
-    return PRICING_MODEL_ALIASES[unprefixedModel] || unprefixedModel
+    const aliasedModel = PRICING_MODEL_ALIASES[unprefixedModel] || unprefixedModel
+    const undatedModel = aliasedModel.replace(PRICING_MODEL_DATE_SUFFIX, '')
+    return PRICING_MODEL_ALIASES[undatedModel] || undatedModel
 }
 
 /**

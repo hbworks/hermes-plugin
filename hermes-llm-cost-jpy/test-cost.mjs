@@ -173,6 +173,65 @@ assert.equal(
     6
 )
 
+// claude.com/ja/pricing#api で 2026-10-10 に確認した Anthropic 5.5/5.1 モデルの単価
+const fable51Pricing = getPricing('anthropic', 'claude-fable-5-1')
+assert.ok(fable51Pricing)
+assert.deepEqual(
+    {
+        cacheRead: fable51Pricing.cacheReadUsdPerMillion,
+        cacheWrite: fable51Pricing.cacheWriteUsdPerMillion,
+        input: fable51Pricing.inputUsdPerMillion,
+        output: fable51Pricing.outputUsdPerMillion
+    },
+    { cacheRead: 0.25, cacheWrite: 12.5, input: 10, output: 50 }
+)
+assert.equal(
+    calculateEstimatedUsd({ input: 1_000_000, output: 1_000_000 }, fable51Pricing),
+    60
+)
+
+const opus55Pricing = getPricing('anthropic', 'claude-opus-5-5')
+assert.ok(opus55Pricing, 'claude-opus-5-5 should have a verified price record')
+assert.deepEqual(
+    {
+        cacheRead: opus55Pricing.cacheReadUsdPerMillion,
+        cacheWrite: opus55Pricing.cacheWriteUsdPerMillion,
+        input: opus55Pricing.inputUsdPerMillion,
+        output: opus55Pricing.outputUsdPerMillion
+    },
+    { cacheRead: 0.2, cacheWrite: 5, input: 4, output: 20 }
+)
+assert.equal(
+    calculateEstimatedUsd({ input: 1_000_000, output: 1_000_000 }, opus55Pricing),
+    24
+)
+assert.equal(
+    calculateEstimatedUsd({
+        cache_creation_input_tokens: 100_000,
+        cache_read_input_tokens: 200_000,
+        input: 1_000_000,
+        output: 1_000_000
+    }, opus55Pricing),
+    23.34
+)
+assert.equal(getPricing('anthropic', 'claude-opus-5-5-20261001'), opus55Pricing)
+
+const sonnet55Pricing = getPricing('anthropic', 'claude-sonnet-5-5')
+assert.ok(sonnet55Pricing)
+assert.deepEqual(
+    {
+        cacheRead: sonnet55Pricing.cacheReadUsdPerMillion,
+        cacheWrite: sonnet55Pricing.cacheWriteUsdPerMillion,
+        input: sonnet55Pricing.inputUsdPerMillion,
+        output: sonnet55Pricing.outputUsdPerMillion
+    },
+    { cacheRead: 0.1, cacheWrite: 2.5, input: 2, output: 10 }
+)
+assert.equal(
+    calculateEstimatedUsd({ input: 1_000_000, output: 1_000_000 }, sonnet55Pricing),
+    12
+)
+
 const longCatPricing = getPricing('longcat', 'LongCat-2.0')
 assert.ok(longCatPricing)
 assert.equal(getPricing('longcat-api', 'longcat-2-0'), longCatPricing)
