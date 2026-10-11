@@ -233,6 +233,18 @@ def _has_nonzero_exit_code(err_lower: str) -> bool:
     return "non-zero" in err_lower or "nonzero" in err_lower
 
 
+def _validated_skill_path(skill_name: str) -> str:
+    """Accept 'name' or 'category/name'; every segment must pass the plain-identifier check."""
+    if not isinstance(skill_name, str):
+        raise ValueError(f"invalid skill name: {skill_name!r}")
+    segments = skill_name.split("/")
+    if len(segments) > 2:
+        raise ValueError(f"invalid skill name: {skill_name!r}")
+    for segment in segments:
+        _validated_skill_name(segment)
+    return skill_name
+
+
 def _validated_skill_name(skill_name: str) -> str:
     """Accept only a single safe path segment so skill names cannot escape skills/."""
     if not isinstance(skill_name, str) or not SKILL_NAME_PATTERN.fullmatch(skill_name):
@@ -251,6 +263,27 @@ def _get_skills_dir() -> Path:
 
 class UnsafeSkillPathError(ValueError):
     """The skill location is a symlink or resolves outside the skills directory."""
+
+
+class AmbiguousSkillError(ValueError):
+    """More than one skill claims the same directory name; refusing to guess which one to change."""
+
+
+# Hermes の skill scanner が読み飛ばすディレクトリ（agent/skill_utils.py:EXCLUDED_SKILL_DIRS と同じ集合）
+_EXCLUDED_SKILL_DIR_NAMES = frozenset((
+    ".git", ".github", ".hub", ".archive", ".curator_backups", ".locks",
+    ".venv", "venv", "node_modules", "site-packages", "__pycache__",
+    ".tox", ".nox", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+))
+
+
+def _is_excluded_skill_path(skill_md: Path, skills_root: Path) -> bool:
+    """True when a SKILL.md sits under a directory Hermes never treats as a skill."""
+    try:
+        parts = skill_md.relative_to(skills_root).parts
+    except ValueError:
+        parts = skill_md.parts
+    return any(part in _EXCLUDED_SKILL_DIR_NAMES for part in parts)
 
 
 def _refuse_unsafe_candidate(
@@ -619,18 +652,54 @@ class WikiSkillEvolutionPlugin:
                 return rule["lesson"]
         return None
 
+    def _find_existing_skill(self, skill_name: str) -> Optional[Path]:
+        """Find an existing SKILL.md the way Hermes does: by directory name, or 'category/name'.
+
+        Searches every SKILL.md under skills/ (so category-nested skills are found), skips
+        directories Hermes excludes, and refuses an ambiguous directory name instead of guessing.
+        """
+        name = _validated_skill_path(skill_name)
+        skills_root = _get_skills_dir()
+        matches: List[Path] = []
+        for skill_md in sorted(skills_root.rglob("SKILL.md")):
+            if _is_excluded_skill_path(skill_md, skills_root):
+                continue
+            rel_dir = skill_md.parent.relative_to(skills_root).as_posix()
+            if "/" in name:
+                if rel_dir == name:
+                    return skill_md
+                continue
+            if skill_md.parent.name == name:
+                matches.append(skill_md)
+        if len(matches) > 1:
+            listing = ", ".join(p.parent.relative_to(skills_root).as_posix() for p in matches)
+            raise AmbiguousSkillError(f"skill name {skill_name!r} matches several skills: {listing}")
+        return matches[0] if matches else None
+
     def _skill_locations(self, skill_name: str) -> Dict[str, Path]:
         """Resolve where a skill lives, refusing symlinks and any path that leaves skills/.
 
-        Symlinked skills directory, skill directory, SKILL.md, or flat ``<name>.md`` are all refused.
+        An existing skill is found wherever it sits under skills/ (Hermes' category layout). A new
+        skill is created at skills/<name>/, and only when no category directory already has that name.
         Two independent checks guard each candidate: no symlink at the path itself, and the real
         location stays under the skills root.
         """
-        name = _validated_skill_name(skill_name)
+        name = _validated_skill_path(skill_name)
         skills_root_path = _get_hermes_home_dir() / "skills"
         if skills_root_path.is_symlink():
             raise UnsafeSkillPathError("skills directory is a symlink; refusing to write through it")
         skills_root = _get_skills_dir()
+
+        existing = self._find_existing_skill(name)
+        if existing is not None:
+            skill_dir = existing.parent
+            flat_file = skills_root / f"{name}.md"
+            for candidate in (skill_dir, existing):
+                _refuse_unsafe_candidate(candidate, skills_root, check_symlink=True, check_containment=True)
+            return {"skill_dir": skill_dir, "skill_file": existing, "flat_file": flat_file}
+
+        if "/" in name:
+            raise UnsafeSkillPathError(f"categorized skill {name!r} does not exist; refusing to create it")
         skill_dir = skills_root / name
         skill_file = skill_dir / "SKILL.md"
         flat_file = skills_root / f"{name}.md"
@@ -883,7 +952,7 @@ class WikiSkillEvolutionPlugin:
         }
 
         try:
-            skill_name = _validated_skill_name(skill_name)
+            skill_name = _validated_skill_path(skill_name)
         except ValueError as exc:
             report.update({"status": "invalid_skill_name", "message": str(exc)})
             return report
@@ -909,14 +978,39 @@ class WikiSkillEvolutionPlugin:
         except UnsafeSkillPathError as exc:
             report.update({"status": "unsafe_skill_path", "message": str(exc)})
             return report
+        except AmbiguousSkillError as exc:
+            report.update({"status": "ambiguous_skill", "message": str(exc)})
+            return report
+        except ValueError as exc:
+            report.update({"status": "invalid_skill_name", "message": str(exc)})
+            return report
 
         skill_file = self._existing_skill_file(locations)
         if skill_file is None:
             # 3a. 新規スキル: 生成内容を形式検査してから初めて書き込む
+            if "/" in skill_name:
+                report.update({
+                    "status": "unsafe_skill_path",
+                    "message": "カテゴリ付きのスキルは既存のものだけを更新できます（新規作成はしません）。",
+                })
+                return report
             if not HERMES_CREATE_NAME_PATTERN.fullmatch(skill_name):
                 report.update({
                     "status": "invalid_skill_name",
                     "message": "新規スキル名は小文字・数字・'.', '_', '-' のみを使用できます（Hermes の規則）。",
+                })
+                return report
+            if skill_name == DEFAULT_SKILL_NAME:
+                report.update({
+                    "status": "fallback_skill_refused",
+                    "message": "対象スキルを特定できませんでした。skill_name を指定してください（'default_skill' は新規作成しません）。",
+                })
+                return report
+            category_dir = _get_skills_dir() / skill_name
+            if category_dir.is_dir() and not (category_dir / "SKILL.md").is_file():
+                report.update({
+                    "status": "name_conflicts_with_category",
+                    "message": f"'{skill_name}' は既存のカテゴリ名です。同名のスキルは作成しません。",
                 })
                 return report
             candidate = self._propose_skill_text(_new_skill_template(skill_name), lessons)
