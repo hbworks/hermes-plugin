@@ -1,8 +1,8 @@
 name: wiki-skill-evolution
 version: "1.0.0"
 description: >
-  WikiSkill 自律進化ループ（Raw → Wiki → Skill）をプラグインとして実装。
-  エラー検出・ナレッジ蓄積・スキル改善・Gating/Rollback・実行メトリクス管理を行います。
+  Implements an autonomous WikiSkill evolution loop (Raw → Wiki → Skill) as a plugin.
+  Detects errors, accumulates knowledge, improves skills, manages gating and rollback, and tracks execution metrics.
 author: masato
 provides_tools:
   - run_wiki_skill_evolution
