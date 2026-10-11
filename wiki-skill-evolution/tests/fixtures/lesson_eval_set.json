@@ -1,0 +1,24 @@
+{
+  "_note": "Golden evaluation set for WikiSkill lesson extraction and skill patching. Positive cases map a failure text to the expected rule prefix; negative cases must produce no lesson. Add a case whenever a misclassification is found.",
+  "positive": [
+    {"id": "import_error", "error": "ModuleNotFoundError: No module named 'requests'", "expect_prefix": "[Python/Path]"},
+    {"id": "file_not_found", "error": "FileNotFoundError: [Errno 2] No such file or directory: 'config.json'", "expect_prefix": "[IO/FileNotFound]"},
+    {"id": "timeout", "error": "urllib.error.URLError: <urlopen error timed out>", "expect_prefix": "[Net/Timeout]"},
+    {"id": "permission", "error": "PermissionError: [Errno 13] Permission denied: '/var/log/app.log'", "expect_prefix": "[OS/Permission]"},
+    {"id": "skill_description_too_long", "error": "Description is 90 chars — new skills must fit the 57-char system-prompt budget.", "expect_prefix": "[Hermes/Skill]"},
+    {"id": "patch_not_unique", "error": "Found 2 matches for old_string. Provide more context to make it unique.", "expect_prefix": "[Hermes/Patch]"},
+    {"id": "patch_not_found", "error": "Could not find a match for old_string in the file", "expect_prefix": "[Hermes/Patch]"},
+    {"id": "frontmatter_missing", "error": "SKILL.md must start with YAML frontmatter (---). See existing skills for format.", "expect_prefix": "[Hermes/Skill]"},
+    {"id": "frontmatter_unclosed", "error": "SKILL.md frontmatter is not closed. Ensure you have a closing '---' line.", "expect_prefix": "[Hermes/Skill]"},
+    {"id": "exit_code_real_failure", "error": "command failed with exit code 2", "expect_prefix": "[Terminal/Exit]"},
+    {"id": "exit_code_fatal", "error": "exit code 1: fatal: not a git repository", "expect_prefix": "[Terminal/Exit]"}
+  ],
+  "negative": [
+    {"id": "success_exit_zero", "error": "Process finished with exit code 0"},
+    {"id": "git_diff_files_differ", "error": "git diff returned exit code 1 (files differ)"},
+    {"id": "grep_no_matches", "error": "grep: no matches found (exit code 1)"},
+    {"id": "diff_files_differ", "error": "diff: files differ (exit code 1)"},
+    {"id": "unknown_provider_failure", "error": "Opaque provider failure: secret detail"},
+    {"id": "generic_tool_error_label", "error": "tool_error"}
+  ]
+}

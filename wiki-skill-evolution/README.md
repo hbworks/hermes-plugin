@@ -2,8 +2,8 @@
 
 [ English | [日本語](#japanese) ]
 
-An autonomous evolution plugin implementing the **Raw/Error → Wiki/Knowledge → Skill** feedback loop for Hermes Agent.  
-Automatically intercepts runtime tool errors, distills actionable lessons, and synthesizes updates directly into skill definitions (`SKILL.md`).
+An autonomous evolution plugin for Hermes Agent. It records failed tool calls, extracts lessons from known error patterns with fixed rules, and — when `run_wiki_skill_evolution` is called — adds those lessons to skill definitions (`SKILL.md`).  
+The plugin does not write to a wiki and does not change skills at the moment an error occurs.
 
 ---
 
@@ -17,51 +17,61 @@ Ensures that errors encountered during real-world agent execution (e.g., Python 
                  ▼
 ┌─────────────────────────────────────────┐
 │ Hook: post_tool_call                    │
-│ ・Captures error message, tool, timestamp│
+│ ・Records error text, tool, skill, time │
+│   (credentials masked; no raw args)     │
 └─────────────────────────────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────┐
 │ Evolution Cycle (run_wiki_skill_evolution)│
-│ 1. Pattern classification & lesson rules│
-│ 2. Distill knowledge into wiki store   │
-│ 3. Patch skill definitions (SKILL.md)   │
-│ 4. Golden task verification (Gating)    │
+│ 1. Rule-based lesson extraction         │
+│ 2. Patch skill definitions (SKILL.md)   │
+│ 3. Hermes frontmatter check + gating    │
+│ 4. Optional Git commit (commit=true)    │
 └─────────────────────────────────────────┘
                  │
                  ▼
-[ Future Sessions Avoid the Same Failure ]
+[ Later Sessions Read the Updated Skill ]
 ```
 
 ---
 
 ## ⚖️ Design Approach: Why Heuristics? (vs Heavy Prompt Evolution)
 
-Unlike heavy prompt evolution frameworks (e.g., DSPy + GEPA in `self-evolution`), WikiSkill Evolution is intentionally built around **deterministic, rule-based heuristics** for immediate runtime self-healing:
+Unlike heavy prompt evolution frameworks (e.g., DSPy + GEPA in `self-evolution`), WikiSkill Evolution is intentionally built around **deterministic, rule-based heuristics** for the errors it can recognize:
 
-- **80% of Real-World Agent Failures are Environmental**:
-  In production, agents rarely fail due to subtle prompt nuances; they fail on `ImportError`, incorrect file paths, timeouts, and missing OS permissions.
-- **Zero Token Cost & Millisecond Turnaround**:
-  Running iterative LLM reflection loops or genetic algorithms for simple environment-level fixes is expensive overkill. WikiSkill patches skills deterministically in milliseconds with **zero LLM API cost**.
-- **Deterministic & Safe**:
-  Eliminates the regression risks common in probabilistic prompt generation, acting as a lightweight **first-line of defense** for daily operations.
+- **Many Real-World Agent Failures are Environmental**:
+  Agents often fail on `ImportError`, incorrect file paths, timeouts, and missing OS permissions. The rules cover these and a few Hermes skill-format errors.
+- **No LLM Cost for Lesson Extraction**:
+  Rule matching uses no LLM calls. Errors the rules do not recognize are recorded but never turned into skill text.
+- **Deterministic & Gated**:
+  Skill changes are checked against Hermes' own frontmatter rules and a section gate before they are kept.
 
 ---
 
 ## 🌟 Key Features
 
-1. **Automatic Error Interception (`post_tool_call` hook)**
-   - Listens to tool execution failures across sessions, caching recent errors (up to 50 entries) in memory and appending them to `~/.hermes/profiles/<profile_name>/logs/evolution_errors.jsonl`.
-   - The log is read across restarts for the requested lookback window and rotated at 5 MB (one `.1` backup is retained).
-2. **Error Pattern Classification & Distillation**
-   - Built-in heuristic rules for path imports, missing files, network timeouts, and OS permissions to formulate concrete prevention patches.
-3. **Automated Skill Patching**
-   - Automatically injects actionable lessons into `~/.hermes/skills/<skill_name>/SKILL.md` (or the active profile's skill directory).
+1. **Error Recording (`post_tool_call` hook)**
+   - Records failed tool calls. Each record keeps the error text (with credentials masked), the tool name, and the resolved skill name. Raw tool arguments are **not** stored.
+   - Stored per Hermes profile in `<profile home>/logs/evolution_errors.jsonl`, where the profile home is the one Hermes assigns to the call (`hermes_constants.get_hermes_home()`).
+   - The log is created owner-only (`0600`, directory `0700`), read back across restarts for the lookback window, and rotated at 5 MB (one `.1` backup is kept).
+2. **Rule-based Lesson Extraction**
+   - Built-in rules for missing modules, missing files, timeouts, permission errors, `patch` match failures, Hermes skill-format errors, and non-zero terminal exits.
+   - Non-zero exits are judged on the exit number Hermes reports (`exit 2`, or `終了コード 2` in the Japanese locale). Informational exits such as `git diff` / `diff` / `grep` returning 1 are not treated as failures.
+3. **Skill Update (on `run_wiki_skill_evolution` only)**
+   - Lessons are applied when the tool is called, not at the moment an error occurs. Nothing is written to a wiki.
+   - Existing skills get the lesson appended to a supported section (or a new `## Pitfalls & Lessons` section).
+   - A new skill is generated with valid `name` / `description` frontmatter. It is written only after Hermes' own `skill_manage` frontmatter check passes.
+   - Gating checks the result against that same frontmatter check and requires a supported section. A failed gate restores the previous bytes (or removes a newly created skill).
+   - Writes never go through a symlink, and a path that resolves outside the profile's `skills/` directory is refused.
 4. **Dry-Run Mode**
-   - Inspect proposed skill modifications and diffs prior to saving or committing changes.
-5. **Context-aware Skill Mapping**
+   - `dry_run: true` reports what would change without writing any file.
+5. **Opt-in Git Commit**
+   - With `commit: true`, a successful change is committed. A new skill becomes its own Git repository. For an existing skill, the commit happens only if the skill directory is the root of its own repository; otherwise the change is left uncommitted and reported as such.
+   - The default is `commit: false`: files are written and nothing is committed.
+6. **Context-aware Skill Mapping**
    - `git_*` failures target `git_workflow`; Python execution failures target the skill found in the command path when possible.
-   - Explicit `skill_name` always takes precedence, with `default_skill` as the final fallback.
+   - Explicit `skill_name` always takes precedence. Otherwise the target comes from the most recent error, and `default_skill` is the final fallback.
 
 ---
 
@@ -69,15 +79,16 @@ Unlike heavy prompt evolution frameworks (e.g., DSPy + GEPA in `self-evolution`)
 
 ### `run_wiki_skill_evolution`
 
-Triggers the autonomous evolution cycle. Can be invoked directly by the user or triggered autonomously by the agent.
+Triggers the evolution cycle. Can be invoked directly by the user or triggered by the agent.
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `skill_name` | string | `"default_skill"` | Name of the skill to evolve |
+| `skill_name` | string | inferred from the latest error | Name of the skill to evolve |
 | `hours` | integer | `6` | Error log lookback window in hours |
-| `dry_run` | boolean | `false` | When `true`, returns proposed patches without applying file changes |
+| `dry_run` | boolean | `false` | When `true`, reports the proposed change and writes nothing |
+| `commit` | boolean | `false` | When `true`, commits the change to Git after gating passes |
 
-When `skill_name` is omitted, the plugin infers the target from the error's tool name and command context.
+When `skill_name` is omitted, the plugin infers the target from the most recent recorded error's tool name and command context.
 
 ---
 
@@ -135,66 +146,77 @@ Restart Hermes Agent to activate the hooks and make `run_wiki_skill_evolution` a
 
 [ [English](#wikiskill-evolution-plugin-for-hermes-agent) | 日本語 ]
 
-Hermes Agent における **自律進化ループ（Raw/Error → Wiki/Knowledge → Skill）** を実装するプラグインです。  
-ツールの実行エラーを自動検知して教訓（ナレッジ）を抽出し、既存のスキル定義（`SKILL.md`）へフィードバック・自動更新を行います。
+Hermes Agent における **ツール実行エラーの記録と、ルールに基づくスキル改善** を行うプラグインです。  
+ツールの実行エラーを記録し、既知のエラーパターンから固定ルールで教訓を抽出します。`run_wiki_skill_evolution` を呼んだときに、その教訓を既存のスキル定義（`SKILL.md`）へ追記します。  
+Wiki への書き込みは行わず、エラー発生の瞬間にスキルを変更することもありません。
 
 ---
 
 ## 🎯 背景とコンセプト
 
-AI エージェントが日々のタスクを実行する中で遭遇するエラー（Python の ImportError、ファイルパスエラー、タイムアウト、権限エラーなど）を無駄にせず、**永続的なスキルやナレッジへと自動昇華（自律進化）** させる仕組みを提供します。
+AI エージェントが日々のタスクを実行する中で起きるエラー（Python の ImportError、ファイルパスエラー、タイムアウト、権限エラーなど）を記録し、既知のパターンに当たるものについてスキルへ改善を反映します。
 
 ```
 [ ツール実行エラー発生 ]
           │
           ▼
 ┌─────────────────────────────────────────┐
-│ Hook: post_tool_call                   │
-│ ・エラー内容、対象ツール、時刻を即時収集│
+│ Hook: post_tool_call                    │
+│ ・エラー内容・ツール・スキル・時刻を記録│
+│   （秘密値はマスク、生の引数は保存しない）│
 └─────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────┐
 │ 自律進化サイクル (run_wiki_skill_evolution) │
-│ 1. エラーパターンの分類・教訓抽出       │
-│ 2. Wiki/ナレッジへの追記                │
-│ 3. 対象スキル (SKILL.md) へのパッチ適用 │
-│ 4. ゴールデンタスク検証 (Gating)        │
+│ 1. ルールに基づく教訓抽出               │
+│ 2. 対象スキル (SKILL.md) へのパッチ適用 │
+│ 3. Hermes の形式検査 + Gating           │
+│ 4. 任意で Git コミット (commit=true)    │
 └─────────────────────────────────────────┘
           │
           ▼
-[ 次回以降のセッションで同じエラーを回避 ]
+[ 以降のセッションで更新済みのスキルを読む ]
 ```
 
 ---
 
 ## ⚖️ 設計アプローチ：なぜルールベース（Heuristics）なのか？
 
-公式の `self-evolution`（DSPy + GEPA）のような高度なプロンプト最適化フレームワークに対し、本プラグインは**「Fast-path（即時自己修復）」** に特化して設計されています。
+公式の `self-evolution`（DSPy + GEPA）のような高度なプロンプト最適化フレームワークに対し、本プラグインは**認識できるエラーに対して決定論的にスキルを更新する**ことに絞って設計されています。
 
-- **現場エラーの8割は環境・実行起因**:
-  実務でエージェントがスタックする最大の要因は、プロンプトの微細なニュアンスではなく `ImportError`、パス解決ミス、タイムアウト、権限エラーといった**機械的な環境エラー**です。
-- **ミリ秒修復 & APIコストゼロ**:
-  これらの定型エラーに対して重いLLM推論ループや遺伝的アルゴリズムを回すのは過剰装備（オーバーキル）です。本プラグインはルールベースで決定論的にパッチを適用するため、**推論API代は一切かからず、エラー発生の瞬間にミリ秒で修復**されます。
-- **決定論的で安全（リグレッションなし）**:
-  確率的なプロンプト書き換えに伴う「以前動いていたプロンプトの劣化（先祖返り）」リスクがありません。日々の運用を支える**「低コスト・即効性の第1防衛ライン」**として機能します。
+- **環境起因のエラーが多い**:
+  `ImportError`、パス解決ミス、タイムアウト、権限エラーといった機械的なエラーを対象にしています。Hermes のスキル形式エラーと終了コードも扱います。
+- **教訓の抽出に LLM を使わない**:
+  ルール照合に LLM 呼び出しはありません。ルールに当たらないエラーは記録されますが、スキル文面にはなりません。
+- **決定論的で検査付き**:
+  スキルの変更は Hermes 自身の frontmatter 検査と、セクションの Gating を通ったものだけを残します。
 
 ---
 
 ## 🌟 主な機能
 
-1. **ツールエラーのリアルタイム自動捕捉 (`post_tool_call` フック)**
-   - エージェントがツールを実行しエラーが発生した際、エラーメッセージとコンテキストをメモリ（直近50件）と `~/.hermes/profiles/<profile_name>/logs/evolution_errors.jsonl` に保存。
-   - 再起動後も指定時間内（既定6時間）のログを読み出し、ログは5MBでローテーション。
-2. **エラー分析と教訓の自動抽出**
-   - パス解決（ImportError, FileNotFoundError）、ネットワーク（Timeout）、OS権限（PermissionDenied）などの典型的なエラーパターンを判定し、再発防止の知見を生成。
-3. **スキルの自動更新・パッチ適用**
-   - `~/.hermes/skills/<skill_name>/SKILL.md`（またはアクティブプロファイルのスキル）へ知見を自動追記。
-4. **ドライラン（Dry-Run）対応**
-   - 実際にファイルを変更する前に、どのようなパッチが適用されるかをシミュレーション確認可能。
-5. **コンテキストに基づくスキル自動判定**
-   - `git_*` は `git_workflow`、Python実行はコマンド内のスキルパスを優先して対象を判定。
-   - `skill_name` の明示指定、該当なしの場合の `default_skill` フォールバックにも対応。
+1. **エラーの記録 (`post_tool_call` フック)**
+   - 失敗したツール呼び出しを記録します。エラー本文（秘密値はマスク）、ツール名、判定したスキル名を保存し、**生の引数は保存しません**。
+   - 保存先は Hermes がその呼び出しに割り当てたプロファイルのホーム（`hermes_constants.get_hermes_home()`）配下の `logs/evolution_errors.jsonl` です。プロファイルごとに分かれます。
+   - ログは所有者のみ読み書き（ファイル `0600`、ディレクトリ `0700`）で作成し、再起動後も指定時間内のログを読み出します。5MB でローテーションし、`.1` を 1 世代残します。
+2. **ルールに基づく教訓の抽出**
+   - ライブラリ不足、ファイル不在、タイムアウト、権限エラー、`patch` の一致失敗、Hermes のスキル形式エラー、terminal の非ゼロ終了に対するルールを持ちます。
+   - 非ゼロ終了は、Hermes が報告する終了コード（英語 `exit 2`、日本語ロケール `終了コード 2`）で判定します。`git diff` / `diff` / `grep` が 1 を返す情報的な終了は失敗として扱いません。
+3. **スキルの更新（`run_wiki_skill_evolution` 実行時のみ）**
+   - 教訓は、エラーが起きた瞬間ではなくツールを呼んだときに反映します。Wiki への書き込みは行いません。
+   - 既存スキルには、対応するセクション（無ければ新規の `## Pitfalls & Lessons`）へ教訓を追記します。
+   - 新規スキルは `name` / `description` を持つ有効な frontmatter で生成し、Hermes 自身の `skill_manage` の形式検査を通った場合にだけ書き込みます。
+   - Gating も同じ frontmatter 検査と、対応セクションの有無で判定します。失敗した場合は元のバイト列に戻し、新規作成したスキルは削除します。
+   - symlink を経由した書き込みは行わず、プロファイルの `skills/` の外へ解決されるパスは拒否します。
+4. **ドライラン（Dry-Run）**
+   - `dry_run: true` のときは、どのような変更になるかを報告するだけで、ファイルは書き込みません。
+5. **任意の Git コミット（opt-in）**
+   - `commit: true` のときだけ、成功した変更をコミットします。新規スキルは専用の Git リポジトリとして初期化されます。既存スキルは、そのスキルディレクトリ自体がリポジトリのルートである場合にだけコミットし、そうでなければ未コミットのまま報告します。
+   - 既定は `commit: false` で、ファイルは書き込むがコミットはしません。
+6. **コンテキストに基づくスキル自動判定**
+   - `git_*` は `git_workflow`、Python 実行はコマンド内のスキルパスを優先して判定します。
+   - `skill_name` の明示指定が常に優先されます。指定が無いときは直近のエラーから判定し、それも無理なら `default_skill` にフォールバックします。
 
 ---
 
@@ -202,13 +224,14 @@ AI エージェントが日々のタスクを実行する中で遭遇するエ�
 
 ### `run_wiki_skill_evolution`
 
-自律進化サイクルを実行します。エージェント自身が自律的に呼び出すことも、ユーザーが指示して実行させることも可能です。
+進化サイクルを実行します。ユーザーが指示して実行させることも、エージェントが呼び出すことも可能です。
 
 | パラメータ | 型 | デフォルト値 | 説明 |
 | :--- | :--- | :--- | :--- |
-| `skill_name` | string | 自動判定 | 進化・更新対象のスキル名。省略時はツール名・実行コマンドから判定 |
+| `skill_name` | string | 直近のエラーから判定 | 進化・更新対象のスキル名。省略時は直近の記録されたエラーのツール名・実行コマンドから判定 |
 | `hours` | integer | `6` | 遡って分析するエラーログの期間（時間） |
-| `dry_run` | boolean | `false` | `true` の場合、実際のファイル変更やコミットを行わずパッチ内容のみを出力 |
+| `dry_run` | boolean | `false` | `true` の場合、変更内容を報告するだけで、ファイルを書き込まない |
+| `commit` | boolean | `false` | `true` の場合、Gating 成功後に変更を Git コミットする |
 
 ---
 

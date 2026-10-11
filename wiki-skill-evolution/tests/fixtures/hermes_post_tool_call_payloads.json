@@ -1,0 +1,59 @@
+{
+  "_source": "hermes-agent model_tools.py:_emit_post_tool_call_hook (f925b01) and _tool_result_observer_fields",
+  "_note": "Shapes of post_tool_call kwargs as Hermes invokes them. Used by the replay tests in test_hook_payloads.py.",
+  "error_message_present": {
+    "tool_name": "python_run",
+    "args": {"command": "python skills/web_scraper/fetch.py"},
+    "result": "{\"error\": \"ModuleNotFoundError: No module named 'requests'\"}",
+    "task_id": "t1", "session_id": "s1", "tool_call_id": "c1", "turn_id": "u1", "api_request_id": "",
+    "duration_ms": 12,
+    "status": "error",
+    "error_type": "tool_error",
+    "error_message": "ModuleNotFoundError: No module named 'requests'",
+    "middleware_trace": []
+  },
+  "result_json_error_without_status": {
+    "tool_name": "python_run",
+    "args": {"command": "python skills/web_scraper/fetch.py"},
+    "result": "{\"error\": \"Permission denied: /var/log/app.log\"}",
+    "task_id": "t1", "session_id": "s1", "tool_call_id": "c2", "turn_id": "u1", "api_request_id": "",
+    "duration_ms": 3,
+    "status": null,
+    "error_type": null,
+    "error_message": null,
+    "middleware_trace": []
+  },
+  "status_error_type_only": {
+    "tool_name": "bash",
+    "args": {"command": "ls /nope"},
+    "result": "ls: /nope: No such file or directory",
+    "task_id": "t1", "session_id": "s1", "tool_call_id": "c3", "turn_id": "u1", "api_request_id": "",
+    "duration_ms": 5,
+    "status": "error",
+    "error_type": "tool_error",
+    "error_message": "ls: /nope: No such file or directory",
+    "middleware_trace": []
+  },
+  "success_ok": {
+    "tool_name": "terminal",
+    "args": {"command": "echo hello"},
+    "result": "{\"output\": \"hello\", \"exit_code\": 0}",
+    "task_id": "t1", "session_id": "s1", "tool_call_id": "c4", "turn_id": "u1", "api_request_id": "",
+    "duration_ms": 42,
+    "status": "ok",
+    "error_type": null,
+    "error_message": null,
+    "middleware_trace": []
+  },
+  "terminal_nonzero_informational": {
+    "tool_name": "terminal",
+    "args": {"command": "git diff --stat"},
+    "result": "{\"output\": \"a.py | 2 +-\", \"exit_code\": 1}",
+    "task_id": "t1", "session_id": "s1", "tool_call_id": "c5", "turn_id": "u1", "api_request_id": "",
+    "duration_ms": 9,
+    "status": "ok",
+    "error_type": null,
+    "error_message": null,
+    "middleware_trace": []
+  }
+}

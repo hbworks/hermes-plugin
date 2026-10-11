@@ -1,0 +1,54 @@
+{
+  "_source": "hermes-agent model_tools._tool_result_observer_fields (run against the live module) + agent/display._detect_tool_failure. error_message values are the Japanese-locale display strings Hermes emits for terminal exit codes (locales/ja.yaml: display.failure.exit_code = '終了コード {code}').",
+  "_note": "expect_record=true means a real failure that should be recorded; expect_lesson says whether the rule engine must produce a [Terminal/Exit] lesson. Informational exits (git diff / grep / diff returning 1) must not be recorded.",
+  "terminal_exit1_real_failure": {
+    "tool_name": "terminal",
+    "args": {"command": "git -C /nonexistent status"},
+    "result": "{\"output\": \"\", \"exit_code\": 1, \"error\": null}",
+    "status": "error",
+    "error_type": "tool_error",
+    "error_message": "終了コード 1",
+    "expect_record": true,
+    "expect_lesson": true
+  },
+  "terminal_exit2_real_failure": {
+    "tool_name": "terminal",
+    "args": {"command": "ls /definitely/missing"},
+    "result": "{\"output\": \"\", \"exit_code\": 2, \"error\": null}",
+    "status": "error",
+    "error_type": "tool_error",
+    "error_message": "終了コード 2",
+    "expect_record": true,
+    "expect_lesson": true
+  },
+  "terminal_git_diff_informational": {
+    "tool_name": "terminal",
+    "args": {"command": "git diff --stat"},
+    "result": "{\"output\": \"a.py | 2 +-\", \"exit_code\": 1, \"error\": null}",
+    "status": "error",
+    "error_type": "tool_error",
+    "error_message": "終了コード 1",
+    "expect_record": false,
+    "expect_lesson": false
+  },
+  "terminal_grep_no_match_informational": {
+    "tool_name": "terminal",
+    "args": {"command": "grep -n needle haystack.txt"},
+    "result": "{\"output\": \"\", \"exit_code\": 1, \"error\": null}",
+    "status": "error",
+    "error_type": "tool_error",
+    "error_message": "終了コード 1",
+    "expect_record": false,
+    "expect_lesson": false
+  },
+  "terminal_exit0_success": {
+    "tool_name": "terminal",
+    "args": {"command": "echo hello"},
+    "result": "{\"output\": \"hello\", \"exit_code\": 0, \"error\": null}",
+    "status": "ok",
+    "error_type": null,
+    "error_message": null,
+    "expect_record": false,
+    "expect_lesson": false
+  }
+}
