@@ -145,7 +145,7 @@ class TestWikiSkillEvolution(unittest.TestCase):
         skill_file = skill_dir / "SKILL.md"
         original = "# Safe Skill\n\n## Workflow\n- Keep this workflow.\n"
         skill_file.write_text(original, encoding="utf-8")
-        self.plugin.on_post_tool_call(tool_name="bash", error="Opaque provider failure: secret detail")
+        self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "safe_skill"}, error="Opaque provider failure: secret detail")
         raw_records = self.plugin._read_error_log(hours=6)
 
         self.assertEqual(raw_records[0]["error"], "Opaque provider failure: secret detail")
@@ -297,14 +297,14 @@ class TestWikiSkillEvolution(unittest.TestCase):
         self.assertEqual(len(self.plugin.recent_errors), 0)
 
         # Failure call - should record
-        self.plugin.on_post_tool_call(tool_name="bash", args={}, result=None, error="ImportError: missing mod")
+        self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "bash_skill"}, result=None, error="ImportError: missing mod")
         self.assertEqual(len(self.plugin.recent_errors), 1)
         self.assertEqual(self.plugin.recent_errors[0]["tool"], "bash")
         self.assertIn("ImportError", self.plugin.recent_errors[0]["error"])
 
         # Overflow limit check (50 entries)
         for i in range(60):
-            self.plugin.on_post_tool_call(tool_name="bash", error=f"Error {i}")
+            self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "bash_skill"}, error=f"Error {i}")
         self.assertEqual(len(self.plugin.recent_errors), 50)
 
     def test_post_tool_call_capture_supports_hermes_error_kwargs_and_result(self):
@@ -335,7 +335,7 @@ class TestWikiSkillEvolution(unittest.TestCase):
             with self.subTest(tool_name=tool_name):
                 self.plugin.on_post_tool_call(
                     tool_name=tool_name,
-                    args={"case": tool_name},
+                    args={"case": tool_name, "skill_name": "hook_skill"},
                     result=result,
                     **hook_kwargs,
                 )
@@ -373,7 +373,7 @@ class TestWikiSkillEvolution(unittest.TestCase):
         self.assertEqual(len(restarted._read_error_log(hours=6)), 1)
 
     def test_persisted_timestamp_is_timezone_aware(self):
-        self.plugin.on_post_tool_call(tool_name="bash", error="ImportError: missing mod")
+        self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "bash_skill"}, error="ImportError: missing mod")
         record = json.loads((self.hermes_home / "logs" / "evolution_errors.jsonl").read_text(encoding="utf-8"))
         self.assertIsNotNone(datetime.datetime.fromisoformat(record["ts"]).tzinfo)
 
@@ -384,7 +384,7 @@ class TestWikiSkillEvolution(unittest.TestCase):
         try:
             self.plugin._persist_error = lambda record: False
             for i in range(main.MAX_PENDING_ERRORS + 10):
-                self.plugin.on_post_tool_call(tool_name="bash", error=f"error-{i}")
+                self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "bash_skill"}, error=f"error-{i}")
             self.assertEqual(len(self.plugin._pending_errors), main.MAX_PENDING_ERRORS)
         finally:
             self.plugin._persist_error = original_persist
@@ -463,7 +463,7 @@ class TestWikiSkillEvolution(unittest.TestCase):
             ),
             "existing_skill",
         )
-        self.assertEqual(self.plugin._resolve_skill_name("unknown_tool"), "default_skill")
+        self.assertEqual(self.plugin._resolve_skill_name("unknown_tool"), "unknown")
 
     def test_error_log_rotates_at_size_limit(self):
         """Should rotate an oversized JSONL file before appending."""
@@ -473,7 +473,7 @@ class TestWikiSkillEvolution(unittest.TestCase):
         try:
             main.ERROR_LOG_MAX_BYTES = 100
             for i in range(3):
-                self.plugin.on_post_tool_call(tool_name="bash", error=f"error-{i}-" + ("x" * 60))
+                self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "bash_skill"}, error=f"error-{i}-" + ("x" * 60))
             self.assertTrue((self.hermes_home / "logs" / "evolution_errors.jsonl.1").exists())
         finally:
             main.ERROR_LOG_MAX_BYTES = original_limit

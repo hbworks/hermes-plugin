@@ -82,16 +82,87 @@ class TestCategorySkillLookup(unittest.TestCase):
     def test_missing_skill_returns_none(self):
         self.assertIsNone(self.plugin._find_existing_skill("nope"))
 
-    def test_default_fallback_name_is_never_created(self):
-        """When no skill can be inferred, the fallback 'default_skill' must not become a new skill."""
+    def test_unknown_skill_is_never_created(self):
+        """A failure whose skill cannot be inferred is recorded as 'unknown', and no skill is created for it."""
         self.plugin.on_post_tool_call(
             tool_name="terminal", args={"command": "ls /missing"}, error="終了コード 2",
         )
 
-        result = self.plugin.run_cycle()
+        self.assertEqual([r["skill"] for r in self.plugin.recent_errors], [main.UNKNOWN_SKILL_NAME])
+        result = self.plugin.run_cycle(skill_name=main.UNKNOWN_SKILL_NAME)
+
+        self.assertEqual(result["status"], "fallback_skill_refused")
+        self.assertFalse((self.skills / main.UNKNOWN_SKILL_NAME).exists())
+        self.assertFalse((self.skills / "default_skill").exists())
+
+    def test_legacy_default_skill_name_is_never_created_either(self):
+        """Old records carry 'default_skill'; an explicit request for it must not create a skill."""
+        self.plugin.on_post_tool_call(
+            tool_name="python_run", args={"skill_name": "default_skill"},
+            error="ModuleNotFoundError: No module named 'x'",
+        )
+        result = self.plugin.run_cycle(skill_name="default_skill")
 
         self.assertEqual(result["status"], "fallback_skill_refused")
         self.assertFalse((self.skills / "default_skill").exists())
+
+    def test_terminal_failure_without_an_inferable_skill_is_recorded_as_unknown(self):
+        """The record is kept (so it can be inspected later), labelled 'unknown' rather than guessed."""
+        self.plugin.on_post_tool_call(
+            tool_name="terminal", args={"command": "ls /missing"}, error="終了コード 2",
+        )
+        log = self.hermes_home / "logs" / "evolution_errors.jsonl"
+        recs = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual([r["skill"] for r in recs], [main.UNKNOWN_SKILL_NAME])
+
+    def test_other_tools_failures_are_recorded_with_the_unknown_label(self):
+        """A failure from another tool with no inferable skill is recorded as 'unknown' too."""
+        self.plugin.on_post_tool_call(
+            tool_name="bash", args={"command": "ls /nope"}, error="No such file or directory",
+        )
+        self.assertEqual(len(self.plugin.recent_errors), 1)
+        self.assertEqual(self.plugin.recent_errors[0]["skill"], main.UNKNOWN_SKILL_NAME)
+
+    def test_failure_with_a_skill_path_is_still_recorded(self):
+        """The same terminal failure is recorded once the command names a skill directory."""
+        self.plugin.on_post_tool_call(
+            tool_name="terminal", args={"command": "python skills/x/run.py"}, error="終了コード 2",
+        )
+        self.assertEqual(len(self.plugin.recent_errors), 1)
+        self.assertEqual(self.plugin.recent_errors[0]["skill"], "x")
+
+    def test_categorized_skill_path_resolves_to_the_skill_not_the_category(self):
+        """skills/<category>/<name>/... must resolve to <name>, not to the category directory."""
+        self.assertEqual(
+            self.plugin._resolve_skill_name("terminal", {"command": "python skills/software-development/x/run.py"}, "終了コード 2"),
+            "x",
+        )
+
+    def test_support_directories_are_not_skill_names(self):
+        """skills/<name>/scripts/... belongs to <name>; 'scripts' itself is never a skill."""
+        for command, expected in (
+            ("python ~/.hermes/skills/web_scraper/scripts/fetch.py", "web_scraper"),
+            ("python skills/web_scraper/references/notes.py", "web_scraper"),
+            ("python skills/cat/web_scraper/scripts/fetch.py", "web_scraper"),
+            ("python skills/web_scraper/fetch.py", "web_scraper"),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    self.plugin._resolve_skill_name("python_run", {"command": command}, ""),
+                    expected,
+                )
+
+    def test_a_path_that_only_reaches_a_support_directory_names_no_skill(self):
+        """With no skill segment (skills/scripts/x.py alone), nothing is inferred and nothing is recorded."""
+        self.assertIsNone(self.plugin._inferred_skill_name("python_run", {"command": "python skills/scripts/x.py"}, ""))
+
+    def test_explicit_default_skill_name_in_args_is_still_recorded(self):
+        """An explicit skill_name, even 'default_skill', is an inference the caller made and is kept."""
+        self.plugin.on_post_tool_call(
+            tool_name="python_run", args={"skill_name": "default_skill"},
+            error="ModuleNotFoundError: No module named 'x'",
+        )
+        self.assertEqual([r["skill"] for r in self.plugin.recent_errors], ["default_skill"])
 
     def test_run_cycle_updates_the_categorized_skill_in_place(self):
         """A lesson for a category-nested skill is applied to that file, not to a new top-level skill."""

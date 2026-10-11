@@ -109,7 +109,7 @@ class TestSecretHandling(_HomeMixin, unittest.TestCase):
 
     def test_error_log_is_owner_only(self):
         """The JSONL and its lock file must be 0600 (and their directory 0700)."""
-        self.plugin.on_post_tool_call(tool_name="bash", error="ImportError: missing mod")
+        self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "bash_skill"}, error="ImportError: missing mod")
         log_path = self.hermes_home / "logs" / "evolution_errors.jsonl"
         self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(log_path.with_suffix(".jsonl.lock").stat().st_mode), 0o600)
@@ -121,7 +121,7 @@ class TestSecretHandling(_HomeMixin, unittest.TestCase):
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("", encoding="utf-8")
         os.chmod(log_path, 0o644)
-        self.plugin.on_post_tool_call(tool_name="bash", error="ImportError: missing mod")
+        self.plugin.on_post_tool_call(tool_name="bash", args={"skill_name": "bash_skill"}, error="ImportError: missing mod")
         self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
 
 

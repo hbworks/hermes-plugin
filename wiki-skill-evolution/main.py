@@ -22,7 +22,9 @@ from typing import Any, Dict, List, Optional, Union
 logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "wiki-skill-evolution"
-DEFAULT_SKILL_NAME = "default_skill"
+DEFAULT_SKILL_NAME = "default_skill"  # 旧版が推定不能時に書いた名前（既存ログの互換用）
+# 新規の推定不能は作り話のスキル名にせず unknown と記録する。unknown は決してスキルとして作らない。
+UNKNOWN_SKILL_NAME = "unknown"
 ERROR_LOG_RELATIVE_PATH = Path("logs") / "evolution_errors.jsonl"
 ERROR_LOG_MAX_BYTES = 5 * 1024 * 1024
 MAX_RECENT_ERRORS = 50
@@ -40,6 +42,9 @@ SKILL_MAPPINGS = {
     "git_": "git_workflow",
     "git": "git_workflow",
 }
+# 支援ディレクトリ（スキル内の補助ファイル置き場）。Hermes の agent/skill_utils.py:SKILL_SUPPORT_DIRS と同じ。
+SKILL_SUPPORT_DIR_NAMES = frozenset(("references", "templates", "assets", "scripts"))
+
 # Python 実行系ツールは、コマンド内の skills/<name>/ を優先してスキルを特定する
 PYTHON_EXEC_TOOLS = frozenset({"python_exec", "python_run"})
 
@@ -546,34 +551,55 @@ class WikiSkillEvolutionPlugin:
                     return str(value)
         return ""
 
-    def _resolve_skill_name(self, tool_name: str, args: Any = None, error: str = "") -> str:
-        """Map tool/command context to a skill, falling back only when unknown."""
+    @staticmethod
+    def _skill_from_context(context: str) -> Optional[str]:
+        """Name of the skill a command path points into, or None when the path does not name one.
+
+        Hermes lays skills out as skills/<name>/ or skills/<category>/<name>/. Inside a skill, the
+        support directories (scripts, references, templates, assets) and file names (run.py, SKILL.md)
+        are not skills, so the segment that owns them is the skill.
+        """
+        match = re.search(r"skills[/\\]((?:[^/\\\s]+)(?:[/\\][^/\\\s]+)?)", context)
+        if not match:
+            return None
+        parts = [part for part in re.split(r"[/\\]", match.group(1)) if part]
+        first = parts[0]
+        if first in SKILL_SUPPORT_DIR_NAMES:
+            return None
+        if len(parts) == 1:
+            return first
+        second = parts[1]
+        if "." in second or second in SKILL_SUPPORT_DIR_NAMES:
+            return first
+        return second
+
+    def _inferred_skill_name(self, tool_name: str, args: Any = None, error: str = "") -> Optional[str]:
+        """The skill this call is about, or None when nothing in it names one (no fallback)."""
         explicit = self._extract_context_value(args, ("skill_name", "skill"))
         if explicit:
             return explicit
-
+        mapped = None
         for mapped_tool, skill_name in sorted(SKILL_MAPPINGS.items(), key=lambda item: -len(item[0])):
             if tool_name == mapped_tool or tool_name.startswith(mapped_tool):
-                if tool_name in PYTHON_EXEC_TOOLS:
-                    context = " ".join(
-                        value for value in (
-                            self._extract_context_value(args, ("command", "cmd", "script", "path")),
-                            error,
-                        ) if value
-                    )
-                    match = re.search(r"(?:skills[/\\])([^/\\\s]+)", context)
-                    if match:
-                        return match.group(1)
-                return skill_name
-
+                mapped = skill_name
+                break
+        if mapped and tool_name not in PYTHON_EXEC_TOOLS:
+            return mapped
         context = " ".join(
             value for value in (
                 self._extract_context_value(args, ("command", "cmd", "script", "path")),
                 error,
             ) if value
         )
-        match = re.search(r"(?:skills[/\\])([^/\\\s]+)", context)
-        return match.group(1) if match else DEFAULT_SKILL_NAME
+        from_path = self._skill_from_context(context)
+        if from_path:
+            return from_path
+        # Python 実行ツールのマッピング名（"python"）はツール種別であってスキル名ではない
+        return None if tool_name in PYTHON_EXEC_TOOLS else mapped
+
+    def _resolve_skill_name(self, tool_name: str, args: Any = None, error: str = "") -> str:
+        """Map tool/command context to a skill, labelled UNKNOWN_SKILL_NAME when nothing names one."""
+        return self._inferred_skill_name(tool_name, args, error) or UNKNOWN_SKILL_NAME
 
     # Hermes の汎用ラベル。これだけでは教訓の材料にならないため、文言が無ければ記録しない。
     _GENERIC_ERROR_LABELS = frozenset({"tool_error", "tool execution failed", "error"})
@@ -940,7 +966,7 @@ class WikiSkillEvolutionPlugin:
             error_records = list(self.recent_errors)
         if not skill_name:
             latest_error = error_records[-1] if error_records else {}
-            skill_name = str(latest_error.get("skill") or DEFAULT_SKILL_NAME)
+            skill_name = str(latest_error.get("skill") or UNKNOWN_SKILL_NAME)
         report: Dict[str, Any] = {
             "ts": _now_str(),
             "skill_name": skill_name,
@@ -1000,7 +1026,7 @@ class WikiSkillEvolutionPlugin:
                     "message": "新規スキル名は小文字・数字・'.', '_', '-' のみを使用できます（Hermes の規則）。",
                 })
                 return report
-            if skill_name == DEFAULT_SKILL_NAME:
+            if skill_name in (DEFAULT_SKILL_NAME, UNKNOWN_SKILL_NAME):
                 report.update({
                     "status": "fallback_skill_refused",
                     "message": "対象スキルを特定できませんでした。skill_name を指定してください（'default_skill' は新規作成しません）。",
