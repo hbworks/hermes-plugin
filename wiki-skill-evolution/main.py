@@ -59,7 +59,9 @@ ERROR_RULES = [
         "patch": "- 実行スクリプトの先頭で sys.path にプロジェクトルートを追加する。",
     },
     {
-        "keywords": ["filenotfounderror", "no such file"],
+        # Python の例外名に加え、Hermes ツールラッパが返す定型メッセージも捕捉する
+        # （read_file: "File not found: <path>" / patch: "Path not found: <path>"）。
+        "keywords": ["filenotfounderror", "no such file", "file not found", "path not found"],
         "lesson": "[IO/FileNotFound] ファイルが見つからない。解決策: ファイルパスを絶対パスに変換するか、作業ディレクトリを確認する。",
         "patch": "- ファイルパスは絶対パスで指定し、FileNotFound エラーを回避する。",
     },
@@ -118,6 +120,36 @@ ERROR_RULES = [
         ],
         "lesson": "[Hermes/Skill] SKILL.md の YAML frontmatter が不正。解決策: ファイル先頭を '---' で囲み、name と description を定義する。",
         "patch": "- SKILL.md は先頭に '---' で囲んだ YAML frontmatter を置き、name と description を定義する。",
+    },
+    {
+        # Hermes ツールラッパの定型メッセージ群（tools/file_tools_write_guards.py の拒否ペイロード）
+        "keywords": ["refusing to overwrite", "the file was not modified", "stale_write_blocked"],
+        "lesson": "[Hermes/Write] write_file が古い読み込み状態での上書きを拒否。解決策: read_file で最新内容を読み直してマージしてから再実行する。小さな変更は patch を使う。",
+        "patch": "- write_file が 'Refusing to overwrite' で拒否されたら read_file で最新内容を読み直してマージし、小さな変更は patch で行う。",
+    },
+    {
+        # tools/file_operations.py の "Failed to read file: ..." 等
+        "keywords": ["failed to read file", "failed to write file"],
+        "lesson": "[Hermes/IO] ファイルの読み書きが失敗。解決策: 存在・権限・バイナリ形式・文字コードを確認する。",
+        "patch": "- ファイルの読み書きが失敗したら存在・権限・バイナリ/文字コードを確認する。",
+    },
+    {
+        # tools/file_operations_search.py の "File search failed while running ripgrep." 等
+        "keywords": ["file search failed", "while running ripgrep", "bounded find traversal"],
+        "lesson": "[Hermes/Search] search_files の検索実行が失敗。解決策: path を狭める、正規表現や file_glob を見直す。",
+        "patch": "- search_files が失敗したら path を狭くするか、正規表現・file_glob を見直す。",
+    },
+    {
+        # tools/tool_search_validation.py の tool_call 検証エラー3種
+        "keywords": ["tool_call 'calls' is not valid json", "tool_call calls[", "requires a 'name'"],
+        "lesson": "[Hermes/ToolCall] tool_call の JSON 構造が不正。解決策: calls 配列の各要素に name と arguments を含む正しい JSON で再送する。",
+        "patch": "- tool_call の JSON は各要素に name と arguments を必ず含め、括弧・引用符の閉じ忘れを避けて再送する。",
+    },
+    {
+        # tools/code_execution_tool.py の拒否・未対応メッセージ
+        "keywords": ["execute_code sandbox is unavailable", "execute_code refused", "no code provided. execute_code"],
+        "lesson": "[Hermes/ExecuteCode] execute_code が実行を拒否。解決策: terminal や個別ツール（read_file/write_file 等）へ代替する。",
+        "patch": "- execute_code が拒否・非対応の場合は terminal や個別ツールへ代替する。",
     },
     {
         # 終了コードは数値で判定する（英語 "exit 2" / 日本語ロケール "終了コード 2" の両方）。

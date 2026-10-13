@@ -100,6 +100,24 @@ class TestWikiSkillEvolution(unittest.TestCase):
             ("Frontmatter must be a YAML mapping.", "[Hermes/Skill]"),
             ("Content cannot be empty.", "[Hermes/Skill]"),
             ("command failed with exit code 1", "[Terminal/Exit]"),
+            # Hermes ツールラッパの定型メッセージ
+            ("File not found: /Users/masato/missing.md", "[IO/FileNotFound]"),
+            ("Path not found: src/", "[IO/FileNotFound]"),
+            (
+                "Refusing to overwrite main.py: the file changed on disk since it was last read. "
+                "The file was NOT modified. Reload the current contents with read_file.",
+                "[Hermes/Write]",
+            ),
+            ("Failed to read file: binary content detected", "[Hermes/IO]"),
+            ("File search failed while running ripgrep.", "[Hermes/Search]"),
+            ("tool_call 'calls' is not valid JSON: Expecting value", "[Hermes/ToolCall]"),
+            ("tool_call calls[0] requires a 'name'", "[Hermes/ToolCall]"),
+            ("tool_call calls[1].arguments is not valid JSON: bad token", "[Hermes/ToolCall]"),
+            (
+                "execute_code sandbox is unavailable in this environment. Use normal tool calls instead.",
+                "[Hermes/ExecuteCode]",
+            ),
+            ("execute_code refused: profile terminal policy unresolved", "[Hermes/ExecuteCode]"),
         ]
 
         for error_text, expected_prefix in cases:
