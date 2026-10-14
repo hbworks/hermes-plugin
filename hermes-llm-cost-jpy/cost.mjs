@@ -17,6 +17,9 @@ const OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
 /** Context length threshold in tokens for Gemini long-context pricing tiers */
 const GEMINI_LONG_CONTEXT_THRESHOLD = 200_000
 
+/** Context length threshold in tokens for xAI long-context pricing tiers */
+const XAI_LONG_CONTEXT_THRESHOLD = 200_000
+
 /** Maximum number of session cost records retained in local storage */
 const MAX_COST_HISTORY_ENTRIES = 200
 
@@ -26,18 +29,25 @@ const GEMINI_PRICING_URL = 'https://ai.google.dev/gemini-api/docs/pricing'
 const ANTHROPIC_PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing'
 const LONGCAT_PRICING_URL = 'https://artificialanalysis.ai/ja/models/longcat-2-0'
 const NEMOTRON_PRICING_URL = 'https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b'
+const CURSOR_PRICING_URL = 'https://cursor.com/docs/models-and-pricing'
+const XAI_PRICING_URL = 'https://docs.x.ai/developers/pricing'
+const GEMINI_4_ARGON_PRICING_URL = 'https://openrouter.ai/google/gemini-4-argon'
 
 /** Default verification date for existing pricing records */
 const CHECKED_AT = '2026-09-18'
 
 const PRICING_MODEL_ALIASES = Object.freeze({
     'longcat-2-0': 'longcat-2.0',
-    'nvidia-nemotron-3-super-120b-a12b': 'nemotron-3-super-120b-a12b'
+    'nvidia-nemotron-3-super-120b-a12b': 'nemotron-3-super-120b-a12b',
+    'grok-4-7': 'grok-4.7',
+    'composer-2-5': 'composer-2.5',
+    'composer-2-5-fast': 'grok-composer-2.5-fast'
 })
 
 const PRICING_PROVIDER_ALIASES = Object.freeze({
     'longcat-api': 'longcat',
-    'nvidia-api': 'nvidia'
+    'nvidia-api': 'nvidia',
+    'xai-oauth': 'xai'
 })
 
 function createTier(inputUsdPerMillion, outputUsdPerMillion, cacheReadUsdPerMillion = null, cacheWriteUsdPerMillion = null) {
@@ -139,6 +149,30 @@ function createAnthropicPricing({
         outputUsdPerMillion: output,
         cacheReadUsdPerMillion: cacheRead,
         cacheWriteUsdPerMillion: cacheWrite
+    })
+}
+
+function createXaiPricing({
+    model,
+    input,
+    output,
+    cacheRead = null,
+    cacheWrite = null,
+    longTier = null,
+    sourceUrl = XAI_PRICING_URL,
+    checkedAt = CHECKED_AT
+}) {
+    return createPricing({
+        provider: 'xai',
+        model,
+        sourceUrl,
+        checkedAt,
+        inputUsdPerMillion: input,
+        outputUsdPerMillion: output,
+        cacheReadUsdPerMillion: cacheRead,
+        cacheWriteUsdPerMillion: cacheWrite,
+        longContextThreshold: longTier ? XAI_LONG_CONTEXT_THRESHOLD : null,
+        longContext: longTier
     })
 }
 
@@ -399,6 +433,15 @@ export const PRICING = Object.freeze({
         output: 0.4,
         cacheRead: 0.01
     }),
+    'gemini/gemini-4-argon': createPricing({
+        provider: 'gemini',
+        model: 'gemini-4-argon',
+        sourceUrl: GEMINI_4_ARGON_PRICING_URL,
+        checkedAt: '2026-10-14',
+        inputUsdPerMillion: 2,
+        outputUsdPerMillion: 10,
+        cacheReadUsdPerMillion: 0.1
+    }),
     'longcat/longcat-2.0': createPricing({
         provider: 'longcat',
         model: 'longcat-2.0',
@@ -413,6 +456,30 @@ export const PRICING = Object.freeze({
         sourceUrl: NEMOTRON_PRICING_URL,
         inputUsdPerMillion: 0.193,
         outputUsdPerMillion: 0.65
+    }),
+    'xai/grok-4.7': createXaiPricing({
+        model: 'grok-4.7',
+        checkedAt: '2026-10-14',
+        input: 2,
+        output: 6,
+        cacheRead: 0.5,
+        longTier: createTier(4, 12, 1)
+    }),
+    'xai/composer-2.5': createXaiPricing({
+        model: 'composer-2.5',
+        checkedAt: '2026-10-14',
+        input: 0.5,
+        output: 2.5,
+        cacheRead: 0.2,
+        sourceUrl: CURSOR_PRICING_URL
+    }),
+    'xai/grok-composer-2.5-fast': createXaiPricing({
+        model: 'grok-composer-2.5-fast',
+        checkedAt: '2026-10-14',
+        input: 3,
+        output: 15,
+        cacheRead: 0.5,
+        sourceUrl: CURSOR_PRICING_URL
     }),
     'anthropic/claude-fable-5-1': createAnthropicPricing({
         model: 'claude-fable-5-1',

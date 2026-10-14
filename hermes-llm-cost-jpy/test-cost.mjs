@@ -516,6 +516,129 @@ assert.equal(
 assert.equal(calculateEstimatedUsd(null, pricing), null)
 assert.equal(calculateEstimatedUsd({ input: 100, output: 100 }, null), null)
 
+// xAI provider records (2026-10-14 additions)
+// research profile uses provider xai-oauth (https://api.x.ai/v1); its live model
+// catalog includes grok-4.7 and grok-composer-2.5-fast.
+const grokPricing = getPricing('xai', 'grok-4.7')
+assert.ok(grokPricing, 'grok-4.7 should have a verified price record')
+assert.deepEqual(
+    {
+        input: grokPricing.inputUsdPerMillion,
+        output: grokPricing.outputUsdPerMillion,
+        cacheRead: grokPricing.cacheReadUsdPerMillion,
+        cacheWrite: grokPricing.cacheWriteUsdPerMillion,
+        longContext: grokPricing.longContext
+    },
+    {
+        input: 2,
+        output: 6,
+        cacheRead: 0.5,
+        cacheWrite: null,
+        longContext: {
+            cacheReadUsdPerMillion: 1,
+            cacheWriteUsdPerMillion: null,
+            inputUsdPerMillion: 4,
+            outputUsdPerMillion: 12
+        }
+    }
+)
+assert.equal(grokPricing.checkedAt, '2026-10-14')
+assert.equal(grokPricing.sourceUrl, 'https://docs.x.ai/developers/pricing')
+assert.ok(getPricing('xai-oauth', 'grok-4.7'), 'xai-oauth provider should resolve to xai pricing')
+assert.ok(getPricing('xai', 'grok-4-7'), 'hyphenated grok-4-7 should resolve to grok-4.7')
+assert.equal(
+    calculateCost({ model: 'grok-4.7', usage: { input: 1_000_000, output: 1_000_000 } }).amountUsd,
+    8
+)
+assert.equal(
+    calculateCost({
+        model: 'grok-4.7',
+        provider: 'xai-oauth',
+        usage: { input: 1_000_000, cached_input: 1_000_000, output: 0 }
+    }).amountUsd,
+    0.5
+)
+assert.equal(
+    calculateCost({
+        model: 'grok-4.7',
+        provider: 'xai-oauth',
+        usage: { input: 1_000_000, output: 1_000_000, long_context: true }
+    }).amountUsd,
+    16
+)
+
+const composerFastPricing = getPricing('xai', 'grok-composer-2.5-fast')
+assert.ok(composerFastPricing, 'grok-composer-2.5-fast should have a verified price record')
+assert.deepEqual(
+    {
+        input: composerFastPricing.inputUsdPerMillion,
+        output: composerFastPricing.outputUsdPerMillion,
+        cacheRead: composerFastPricing.cacheReadUsdPerMillion,
+        cacheWrite: composerFastPricing.cacheWriteUsdPerMillion
+    },
+    { input: 3, output: 15, cacheRead: 0.5, cacheWrite: null }
+)
+assert.equal(composerFastPricing.checkedAt, '2026-10-14')
+assert.ok(
+    getPricing('xai', 'composer-2-5-fast'),
+    'hyphenated composer-2-5-fast should resolve to grok-composer-2.5-fast'
+)
+assert.equal(
+    calculateCost({
+        model: 'grok-composer-2.5-fast',
+        usage: { input: 1_000_000, output: 1_000_000 }
+    }).amountUsd,
+    18
+)
+
+const composerPricing = getPricing('xai', 'composer-2.5')
+assert.ok(composerPricing, 'composer-2.5 should have a verified price record')
+assert.deepEqual(
+    {
+        input: composerPricing.inputUsdPerMillion,
+        output: composerPricing.outputUsdPerMillion,
+        cacheRead: composerPricing.cacheReadUsdPerMillion,
+        cacheWrite: composerPricing.cacheWriteUsdPerMillion
+    },
+    { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: null }
+)
+assert.ok(getPricing('xai', 'composer-2-5'), 'hyphenated composer-2-5 should resolve to composer-2.5')
+assert.equal(
+    calculateCost({ model: 'composer-2.5', usage: { input: 1_000_000, output: 1_000_000 } }).amountUsd,
+    3
+)
+
+// Gemini 4 Argon record (2026-10-14 additions)
+const argonPricing = getPricing('gemini', 'gemini-4-argon')
+assert.ok(argonPricing, 'gemini-4-argon should have a verified price record')
+assert.deepEqual(
+    {
+        input: argonPricing.inputUsdPerMillion,
+        output: argonPricing.outputUsdPerMillion,
+        cacheRead: argonPricing.cacheReadUsdPerMillion,
+        cacheWrite: argonPricing.cacheWriteUsdPerMillion,
+        longContext: argonPricing.longContext
+    },
+    {
+        input: 2,
+        output: 10,
+        cacheRead: 0.1,
+        cacheWrite: null,
+        longContext: undefined
+    }
+)
+assert.equal(argonPricing.checkedAt, '2026-10-14')
+assert.equal(argonPricing.sourceUrl, 'https://openrouter.ai/google/gemini-4-argon')
+
+// OpenRouter style prefixed model name resolves through the model-only fallback
+const argonCost = calculateCost({
+    model: 'google/gemini-4-argon',
+    usage: { input: 1_000_000, output: 1_000_000 }
+})
+assert.equal(argonCost.amountUsd, 12)
+assert.equal(argonCost.provider, 'gemini')
+assert.equal(argonCost.status, 'estimated')
+
 const pluginSource = await readFile(new URL('./plugin.js', import.meta.url), 'utf8')
 assert.equal(/\b(fetch|XMLHttpRequest)\s*\(/.test(pluginSource), false)
 assert.equal(pluginSource.includes('host.request('), false)
