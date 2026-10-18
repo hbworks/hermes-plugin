@@ -120,6 +120,8 @@ memory:
     max_recall: 5
 ```
 
+When `auto_extract` is enabled, only an explicit memory directive that matches the first non-empty line of a user message is extracted; trigger phrases in later lines or pasted examples are ignored.
+
 ---
 
 ## 📁 Repository Structure
@@ -304,6 +306,8 @@ memory:
     auto_extract: true
     max_recall: 5
 ```
+
+`auto_extract` を有効にした場合も、先頭の空でない1行全体が明示的な記憶指示に一致するときだけ抽出します。後続行や貼り付けた例に含まれる語句は対象外です。
 
 ---
 
