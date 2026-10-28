@@ -27,6 +27,7 @@ Runtime pluginのentrypointは`plugin.js`単体です。Hermes Desktopのloader�
 | --- | --- | ---: | ---: | ---: | ---: |
 | `openai-api` | `gpt-6-astra` | `$10.00` | `$1.00` | `$12.50` | `$50.00` |
 | `openai-api` | `gpt-6-luna` | `$0.10` | `$0.01` | `$0.125` | `$0.50` |
+| `openai-api` | `gpt-6.1-terra` | `$1.00` | `$0.05` | `$1.25` | `$5.00` |
 | `openai-api` | `gpt-5.6-sol` | `$4.00` | `$0.40` | `$5.00` | `$20.00` |
 | `openai-api` | `gpt-5.6-terra` | `$2.00` | `$0.20` | `$2.50` | `$12.00` |
 | `openai-api` | `gpt-5.6-luna` | `$0.20` | `$0.02` | `$0.25` | `$1.20` |
@@ -56,7 +57,9 @@ Runtime pluginのentrypointは`plugin.js`単体です。Hermes Desktopのloader�
 | `openai-api` | `o4-mini` | `$1.10` | `$0.275` | `—` | `$4.40` |
 | `openai-api` | `o3-mini` | `$1.10` | `$0.55` | `—` | `$4.40` |
 
-OpenAIの長文脈料金は、明示的に`long_context === true`または`pricing_tier === 'long'`を受け取った場合だけ使います。対象は`gpt-6-astra`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.5-pro`、`gpt-5.4`、`gpt-5.4-pro`です。GeminiとxAI（`grok-4.7`）のlong tierも明示フラグがある場合だけ使います。現行Hermes TUI Gatewayの`focusedUsage`は`long_context`と`pricing_tier`を送信せず、`UsageStats`もセッション累計でリクエスト単位の閾値を公開しないため、標準Desktopのライブ表示ではlong tierへ切り替わりません。
+OpenAIの長文脈料金は、明示的に`long_context === true`または`pricing_tier === 'long'`を受け取った場合だけ使います。対象は`gpt-6-astra`、`gpt-6-luna`、`gpt-6.1-terra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.5-pro`、`gpt-5.4`、`gpt-5.4-pro`です。GeminiとxAI（`grok-4.7`）のlong tierも明示フラグがある場合だけ使います。現行Hermes TUI Gatewayの`focusedUsage`は`long_context`と`pricing_tier`を送信せず、`UsageStats`もセッション累計でリクエスト単位の閾値を公開しないため、標準Desktopのライブ表示ではlong tierへ切り替わりません。
+
+`gpt-6.1-terra`は入力が272Kトークンを超える場合、入力・cache単価を2倍、出力単価を1.5倍にします。Cache writeは30分保持の標準単価（`$1.25 / 1M`）を登録しています。12時間保持の`$2.50 / 1M`はusageから保持時間を判別できないため個別に推定しません。
 
 ### Google Gemini (`gemini`)
 
@@ -124,6 +127,7 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 出典:
 
 - OpenAI: <https://developers.openai.com/api/docs/pricing>
+- OpenAI GPT-6.1 Terra: <https://developers.openai.com/api/docs/models/gpt-6.1-terra>
 - Google Gemini: <https://ai.google.dev/gemini-api/docs/pricing>
 - Gemini 4 Argon: <https://openrouter.ai/google/gemini-4-argon>
 - xAI（Grok 4.7）: <https://docs.x.ai/developers/pricing>
@@ -134,6 +138,8 @@ Anthropicの`cache_creation_input_tokens`は、現行schemaにTTL字段がない
 - NVIDIA Nemotron: <https://artificialanalysis.ai/ja/models/nvidia-nemotron-3-super-120b-a12b>
 
 既存料金表の確認日: `2026-09-18`。`gpt-6-luna` は `2026-09-27` に[OpenAI公式料金表](https://developers.openai.com/api/docs/pricing)で確認しました。Fable 5.1・Opus 5.5・Sonnet 5.5は`2026-10-10`に[Anthropic公式料金ページ](https://claude.com/ja/pricing#api)で確認しました。Gemini 4 Argon・Grok 4.7・Composer 2.5・Composer 2.5 (Fast) は`2026-10-14`にそれぞれ[OpenRouter](https://openrouter.ai/google/gemini-4-argon)、[xAI公式料金ページ](https://docs.x.ai/developers/pricing)、[Cursorのモデルページ](https://cursor.com/ja/docs/models/grok-4-7)で確認しました。Grok 4.7はresearchプロファイルの`xai-oauth`プロバイダー（`https://api.x.ai/v1`）経由で利用されるモデルです。`claude-opus-5-5`のような日付サフィックス付きモデルID（例:`claude-opus-5-5-20261001`）はサフィックスを外して照合します。
+
+`gpt-6.1-terra`は`2026-10-29`に[OpenAI公式モデルページ](https://developers.openai.com/api/docs/models/gpt-6.1-terra)で確認しました。
 
 料金表は固定定義です。実行時に料金API・為替API・外部ネットワークへアクセスしません。料金改定時は`cost.mjs`とテスト、このREADMEを更新し、`scripts/sync-cost-runtime.mjs`で`plugin.js`の実行ブロックを同期してください。
 

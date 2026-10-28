@@ -46,6 +46,51 @@ assert.deepEqual(
 )
 assert.equal(gpt6LunaPricing.checkedAt, '2026-09-27')
 
+const gpt61TerraPricing = getPricing('openai-api', 'gpt-6.1-terra')
+assert.ok(gpt61TerraPricing, 'gpt-6.1-terra should have a verified price record')
+assert.deepEqual(
+    {
+        input: gpt61TerraPricing.inputUsdPerMillion,
+        output: gpt61TerraPricing.outputUsdPerMillion,
+        cacheRead: gpt61TerraPricing.cacheReadUsdPerMillion,
+        cacheWrite: gpt61TerraPricing.cacheWriteUsdPerMillion,
+        longContext: gpt61TerraPricing.longContext
+    },
+    {
+        input: 1,
+        output: 5,
+        cacheRead: 0.05,
+        cacheWrite: 1.25,
+        longContext: {
+            cacheReadUsdPerMillion: 0.1,
+            cacheWriteUsdPerMillion: 2.5,
+            inputUsdPerMillion: 2,
+            outputUsdPerMillion: 7.5
+        }
+    }
+)
+assert.equal(gpt61TerraPricing.checkedAt, '2026-10-29')
+assert.equal(
+    gpt61TerraPricing.sourceUrl,
+    'https://developers.openai.com/api/docs/models/gpt-6.1-terra'
+)
+assert.equal(
+    calculateEstimatedUsd({ input: 1_000_000, output: 1_000_000 }, gpt61TerraPricing),
+    6
+)
+assert.equal(
+    calculateEstimatedUsd({ input: 1_000_000, long_context: true, output: 1_000_000 }, gpt61TerraPricing),
+    9.5
+)
+assert.equal(
+    calculateEstimatedUsd({ cached_input: 1_000_000, input: 1_000_000, output: 0 }, gpt61TerraPricing),
+    0.05
+)
+assert.equal(
+    calculateEstimatedUsd({ cache_write_input: 1_000_000, input: 1_000_000, output: 0 }, gpt61TerraPricing),
+    1.25
+)
+
 assert.equal(
     calculateEstimatedUsd({ input: 1_000_000, output: 0 }, pricing),
     0.2

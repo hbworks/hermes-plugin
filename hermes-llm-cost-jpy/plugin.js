@@ -42,6 +42,7 @@ const MAX_COST_HISTORY_ENTRIES = 200
 
 /** Official pricing documentation source URLs */
 const OPENAI_PRICING_URL = 'https://developers.openai.com/api/docs/pricing'
+const OPENAI_GPT_61_TERRA_PRICING_URL = 'https://developers.openai.com/api/docs/models/gpt-6.1-terra'
 const GEMINI_PRICING_URL = 'https://ai.google.dev/gemini-api/docs/pricing'
 const ANTHROPIC_PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing'
 const LONGCAT_PRICING_URL = 'https://artificialanalysis.ai/ja/models/longcat-2-0'
@@ -109,6 +110,7 @@ function createPricing({
 
 function createOpenAiPricing({
     model,
+    sourceUrl = OPENAI_PRICING_URL,
     checkedAt = CHECKED_AT,
     input,
     output,
@@ -119,7 +121,7 @@ function createOpenAiPricing({
     return createPricing({
         provider: 'openai-api',
         model,
-        sourceUrl: OPENAI_PRICING_URL,
+        sourceUrl,
         checkedAt,
         inputUsdPerMillion: input,
         outputUsdPerMillion: output,
@@ -210,6 +212,16 @@ const PRICING = Object.freeze({
         cacheRead: 0.01,
         cacheWrite: 0.125,
         longTier: createTier(0.2, 0.75, 0.02, 0.25)
+    }),
+    'openai-api/gpt-6.1-terra': createOpenAiPricing({
+        model: 'gpt-6.1-terra',
+        sourceUrl: OPENAI_GPT_61_TERRA_PRICING_URL,
+        checkedAt: '2026-10-29',
+        input: 1,
+        output: 5,
+        cacheRead: 0.05,
+        cacheWrite: 1.25,
+        longTier: createTier(2, 7.5, 0.1, 2.5)
     }),
     'openai-api/gpt-5.6-sol': createOpenAiPricing({
         model: 'gpt-5.6-sol',
